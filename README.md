@@ -55,7 +55,7 @@ shell commands, with or without this server.
 
 ## Limits
 
-- Inner calls must name absolute locations: filesystem `path` and `destination`, the `path` of a search and of each multi_search entry, git and execute `cwd`, process start `cwd`. Relative or missing ones are refused with `relative_path`, because LocalForge has one working folder per server, shared by every chat and task. On Windows a path starting with a single `\` or `/` counts as relative: it follows the current drive. Search results come back with absolute paths when the server could read LocalForge's working folder at startup (it logs to stderr when it couldn't).
+- Inner calls must name absolute locations: filesystem `path` and `destination`, the `path` of a search and of each multi_search entry, git and execute `cwd`, process start `cwd`. filesystem, search and multi_search entries may instead pass an absolute `cwd` and relative paths under it. Relative or missing ones are refused with `relative_path`, because LocalForge has one working folder per server, shared by every chat and task. On Windows a path starting with a single `\` or `/` counts as relative: it follows the current drive. Search results come back with absolute paths: from the call's `cwd` when it has one, else from LocalForge's working folder when the server could read it at startup (it logs to stderr when it couldn't).
 - A single regex match can't be interrupted by the timeout.
 - On timeout, an inner LocalForge call keeps running in LocalForge; only the program stops waiting for it.
 - If LocalForge exits, every later call fails until Quick restarts this server.

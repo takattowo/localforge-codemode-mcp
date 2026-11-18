@@ -81,15 +81,21 @@ const LOCATIONS: Record<string, Array<{ keys: string[]; required: (input: any) =
   execute: [{ keys: ["cwd"], required: () => true }],
   process: [{ keys: ["cwd"], required: (input) => input.action === "start" }],
 }
-const locationProblem = (where: string, input: any, rules: (typeof LOCATIONS)[string], cwd: string | undefined) => {
+// filesystem and search (and each multi_search entry) may instead name relative paths under an absolute cwd.
+const CWD_RULE: (typeof LOCATIONS)[string] = [{ keys: ["cwd"], required: () => true }]
+const locationProblem = (tool: string, where: string, input: any, cwd: string | undefined) => {
+  const underCwd = tool === "filesystem" || tool === "search"
+  const rules = underCwd && input.cwd != null ? CWD_RULE : LOCATIONS[tool]!
+  const or = (k: string) => (underCwd && k !== "cwd" ? " (or an absolute cwd)" : "")
   for (const { keys, required } of rules) {
     // null means "not given", as LocalForge treats it.
     const given = keys.filter((k) => input[k] != null)
-    if (given.length === 0 && required(input)) return `relative_path: ${where} needs an absolute ${keys[0]}${SHARED}`
+    if (given.length === 0 && required(input))
+      return `relative_path: ${where} needs an absolute ${keys[0]}${or(keys[0]!)}${SHARED}`
     for (const k of given) {
       const v = input[k]
       if (typeof v !== "string" || !isAbsolute(v, cwd))
-        return `relative_path: ${where} ${k} must be an absolute path, got ${clip(safeJson(v), 80)}${SHARED}`
+        return `relative_path: ${where} ${k} must be an absolute path, got ${clip(safeJson(v), 80)}${or(k)}${SHARED}`
     }
   }
   return undefined
@@ -99,26 +105,29 @@ const pathProblem = (tool: string, input: any, cwd: string | undefined): string 
   if (tool === "multi_search") {
     const searches = Array.isArray(input.searches) ? input.searches : []
     for (const [i, s] of searches.entries()) {
-      const problem = locationProblem(`localforge.multi_search searches[${i}]`, s ?? {}, LOCATIONS.search!, cwd)
+      const problem = locationProblem("search", `localforge.multi_search searches[${i}]`, s ?? {}, cwd)
       if (problem) return problem
     }
     return undefined
   }
-  return LOCATIONS[tool] ? locationProblem(`localforge.${tool}`, input, LOCATIONS[tool], cwd) : undefined
+  return LOCATIONS[tool] ? locationProblem(tool, `localforge.${tool}`, input, cwd) : undefined
 }
-// LocalForge shows result paths under its working folder relative to it; a program only sees absolute ones.
-const absolutePaths = (tool: string, value: any, cwd: string | undefined) => {
-  if (!cwd || !value || typeof value !== "object") return value
-  const sep = cwd.includes("\\") ? "\\" : "/"
-  const base = cwd.replace(/[\\/]+$/, "")
-  const fix = (results: unknown) => {
-    if (!Array.isArray(results)) return
+// LocalForge shows result paths under the folder a search ran from (the call's cwd, else its own) relative to it;
+// a program only sees absolute ones.
+const absolutePaths = (tool: string, value: any, input: any, cwd: string | undefined) => {
+  if (!value || typeof value !== "object") return value
+  const fix = (results: unknown, own: unknown) => {
+    const from = typeof own === "string" ? own : cwd
+    if (!from || !Array.isArray(results)) return
+    const sep = from.includes("\\") ? "\\" : "/"
+    const base = from.replace(/[\\/]+$/, "")
     for (const r of results)
       if (r && typeof r === "object" && typeof r.path === "string" && !isAbsolute(r.path, cwd))
         r.path = base + sep + r.path.replace(/[\\/]/g, sep)
   }
-  if (tool === "search") fix(value.results)
-  if (tool === "multi_search" && Array.isArray(value.results)) for (const e of value.results) fix(e?.results)
+  if (tool === "search") fix(value.results, input?.cwd)
+  if (tool === "multi_search" && Array.isArray(value.results))
+    value.results.forEach((e: any, i: number) => fix(e?.results, input?.searches?.[i]?.cwd))
   return value
 }
 // A completed call only as a count per tool: its row costs ~150-200 bytes and the program already has its result.
@@ -211,7 +220,7 @@ export function createRunner(o: Options) {
                 if (problem) throw new Error(problem)
                 const r = await o.call(t.name, input)
                 const value = parse(textOf(r))
-                if (!r.isError) return absolutePaths(t.name, value, o.cwd)
+                if (!r.isError) return absolutePaths(t.name, value, input, o.cwd)
                 if (!(value?.code && value?.message)) throw new Error(textOf(r))
                 // An argument mistake: point at the notes the short tool line leaves out.
                 const hint = value.code === "invalid_arguments" ? ` (argument notes: search("localforge.${t.name}"))` : ""
@@ -336,10 +345,10 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
     "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
-    "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
-    "Calls take the same arguments and return the same JSON as direct LocalForge. A refused call rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here are only reachable here.",
+    "JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
+    "Calls take and return the same JSON as direct LocalForge. A refused call rejects; a failed command resolves with success: false. Name absolute paths or an absolute cwd. Processes started here are only reachable here.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}], interrupted may still finish; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}], interrupted may still finish; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes it goes to a file: spilled {path, bytes}, preview and the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [
@@ -350,7 +359,7 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
     ].join("\n")
   const text = [
     ...rules,
-    'Argument notes: return search("localforge.<tool>") from a program. Tools, called as tools.localforge.<name>:',
+    'Tools, called as tools.localforge.<name>; argument notes: return search("localforge.<tool>"):',
     ...exposed.map(compact),
   ].join("\n")
   if (text.length <= QUICK_LIMIT) return text
