@@ -142,6 +142,28 @@ describe("execute", () => {
     expect(full.value).toBe("x".repeat(5000))
   })
 
+  test("a call LocalForge cut for size hands the program the full result from result_path", async () => {
+    const full = { results: [{ path: "/r/a.log", matches: Array.from({ length: 100 }, (_, i) => ({ line: i + 1, text: `l${i}` })) }] }
+    const saved = join(spillDir, "lf-search-result-x.json")
+    writeFileSync(saved, JSON.stringify(full, null, 1))
+    // LocalForge's cut reply: a few matches, then a marker string in the list.
+    const cut = (result_path: string | null) =>
+      ok({
+        result_too_large: true,
+        bytes: 900_000,
+        result_path,
+        hint: "Read result_path ...",
+        results: [{ path: "/r/a.log", matches: [{ line: 1, text: "l0" }, "...[cut: showing 1 of 100 items; full result in result_path]"] }],
+      })
+    const code = `const r = await tools.localforge.search({ query: "l", path: "/r" }); return r.results[0].matches.map((m) => m.text).join(",")`
+    const { body } = await run(runner(() => cut(saved)), code)
+    expect(body.value).toBe(full.results[0]!.matches.map((m) => m.text).join(","))
+    // No full copy: the call fails instead of handing over cut data.
+    const failed = await run(runner(() => cut(null)), code)
+    expect(failed.body.ok).toBe(false)
+    expect(failed.body.error.message).toContain("max_result_bytes")
+  })
+
   test("batch, todo and workspace are hidden; execute and process only with allowShell", async () => {
     const shellOff = runner(() => ok({}), { allowShell: false })
     for (const name of ["batch", "todo", "workspace", "execute", "process"]) expect(shellOff.description).not.toContain(`\n- ${name}(`)

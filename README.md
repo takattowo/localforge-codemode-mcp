@@ -57,6 +57,8 @@ shell commands, with or without this server.
 
 - Calls go to LocalForge as written. Needs localforge-mcp at commit 9bd265d or later (newer than 1.10.0), whose `require_absolute_paths` (on by default) refuses relative or missing locations with `relative_path` and returns absolute search hits; LocalForge has one working folder per server, shared by every chat and task. With that setting off, relative paths use LocalForge's working folder.
 - A single regex match can't be interrupted by the timeout.
+- A LocalForge result over its `max_result_bytes` reaches the program whole, read from the copy LocalForge saved at
+  `result_path`, not as LocalForge's cut reply; if that copy can't be read, the call fails instead.
 - On timeout, an inner LocalForge call keeps running in LocalForge; only the program stops waiting for it.
 - If LocalForge exits, the calls in flight fail and the next call starts it again; if that start fails, the calls waiting on it fail too and the one after tries again. Its tool list is read once at startup.
 - Spilled files and the history file are never cleaned up.

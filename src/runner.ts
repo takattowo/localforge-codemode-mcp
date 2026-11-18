@@ -1,6 +1,6 @@
 import { CodeMode, Tool, toolError } from "@opencode/codemode"
 import { Effect } from "effect"
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 export type McpTool = { name: string; description?: string; inputSchema?: object }
@@ -59,6 +59,16 @@ const clipError = (e: { kind: string; message: string }, cap: number) => ({
   message: clip(e.message, Math.floor(cap / 8)),
 })
 const failed = (v: any) => typeof v === "object" && v !== null && v.success === false
+// LocalForge cuts a result over its max_result_bytes to fit the host's relay; a program filters results itself, so it
+// gets the full copy LocalForge saved, or an error, never the cut one.
+const whole = (cut: any) => {
+  try {
+    return JSON.parse(readFileSync(cut.result_path, "utf8"))
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e)
+    throw new Error(`result over LocalForge's max_result_bytes and its full copy could not be read (${why}); narrow the call`)
+  }
+}
 
 // A completed call only as a count per tool: its row costs ~150-200 bytes and the program already has its result.
 // Only for a run that succeeded: a failed run has no value, so its rows show which side effects happened.
@@ -149,7 +159,7 @@ export function createRunner(o: Options) {
                 // Paths go as written: LocalForge refuses relative ones (relative_path) and returns absolute hits.
                 const r = await o.call(t.name, input)
                 const value = parse(textOf(r))
-                if (!r.isError) return value
+                if (!r.isError) return value?.result_too_large === true ? whole(value) : value
                 if (!(value?.code && value?.message)) throw new Error(textOf(r))
                 // An argument mistake: point at the notes the short tool line leaves out.
                 const hint = value.code === "invalid_arguments" ? ` (argument notes: search("localforge.${t.name}"))` : ""
