@@ -122,7 +122,9 @@ const absolutePaths = (tool: string, value: any, cwd: string | undefined) => {
   return value
 }
 // A completed call only as a count per tool: its row costs ~150-200 bytes and the program already has its result.
-const logOf = (all: Row[]) => {
+// Only for a run that succeeded: a failed run has no value, so its rows show which side effects happened.
+const logOf = (all: Row[], ok: boolean) => {
+  if (!ok) return { counts: {}, rows: all }
   const completed: Record<string, number> = {}
   for (const r of all) if (r.status === "completed") completed[r.tool] = (completed[r.tool] ?? 0) + 1
   return { counts: Object.keys(completed).length ? { completed } : {}, rows: all.filter((r) => r.status !== "completed") }
@@ -270,9 +272,8 @@ export function createRunner(o: Options) {
         ? { kind: "Cancelled", message: "The run was cancelled." }
         : { kind: "InternalError", message: e instanceof Error ? e.message : String(e) }
       result = { ok: false, error }
-      const { counts, rows } = logOf(calls)
-      const head = { ok: false, error: clipError(error, o.maxOutputBytes), ...counts }
-      const part = keepCalls(rows, o.maxOutputBytes, (p) => ({ ...head, ...p }))
+      const head = { ok: false, error: clipError(error, o.maxOutputBytes) }
+      const part = keepCalls(calls, o.maxOutputBytes, (p) => ({ ...head, ...p }))
       reply = { text: JSON.stringify({ ...head, ...part }), isError: true, spilled: false }
     }
     if (o.historyFile) {
@@ -303,8 +304,9 @@ export function createRunner(o: Options) {
 
 function fit(reply: { ok: boolean; error?: { kind: string; message: string }; calls: Row[] }, o: Options) {
   const cap = o.maxOutputBytes
-  const { counts, rows } = logOf(reply.calls)
-  const text = JSON.stringify({ ...reply, ...counts, calls: rows })
+  const { counts, rows } = logOf(reply.calls, reply.ok)
+  const { calls: _, ...rest } = reply
+  const text = JSON.stringify({ ...rest, ...counts, calls: rows })
   const bytes = Buffer.byteLength(text)
   if (bytes <= cap) return { text, isError: !reply.ok, spilled: false }
   mkdirSync(o.spillDir, { recursive: true })
@@ -337,7 +339,7 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
     "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
     "Calls take the same arguments and return the same JSON as direct LocalForge. A refused call rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here are only reachable here.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, completed {tool: count}, calls [{tool, status, input}] for errors and interrupted ones (may still finish). Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}], interrupted may still finish; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [

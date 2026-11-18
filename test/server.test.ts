@@ -127,7 +127,7 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
         for (const name of ["filesystem", "search", "multi_search", "git", "execute", "process"])
           expect(tool.description).toContain(`\n- ${name}({`)
         expect(tool.description).not.toContain("\n- batch(")
-        expect(tool.description).toContain("completed {tool: count}, calls [{tool, status, input}] for errors and interrupted ones")
+        expect(tool.description).toContain("if ok, completed calls only as completed {tool: n}")
         expect(tool.description).toContain("only reachable here")
         expect(tool.description).toContain("or return less")
         expect(tool.description.endsWith("...")).toBe(false)

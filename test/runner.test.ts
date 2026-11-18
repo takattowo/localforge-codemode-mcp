@@ -48,6 +48,7 @@ describe("execute", () => {
     // A completed call is only counted: the program already has its result.
     expect(body.completed).toEqual({ "localforge.filesystem": 1 })
     expect(body.calls).toEqual([])
+    expect(Object.keys(body).slice(-2)).toEqual(["completed", "calls"])
   })
 
   test("chained calls feed one result into the next", async () => {
@@ -130,7 +131,9 @@ describe("execute", () => {
     const { body } = await run(r, `for (let i = 0; i < 5; i++) await tools.localforge.git({ action: "status", cwd: "/r" }); return "done"`)
     expect(body.ok).toBe(false)
     expect(body.error.kind).toBe("ToolCallLimitExceeded")
-    expect(body.completed).toEqual({ "localforge.git": 2 })
+    // A failed run has no value, so every call keeps its row: the model must see which side effects happened.
+    expect(body).not.toHaveProperty("completed")
+    expect(body.calls.map((c: any) => c.status)).toEqual(["completed", "completed"])
   })
 
   test("a reply over the cap is saved to a file and returned as a path and preview", async () => {
@@ -359,8 +362,9 @@ describe("execute", () => {
   })
 
   test("a spilled reply stays under the cap with many calls and non-ASCII text", async () => {
-    // Failed commands, so every call keeps its row.
-    const r = runner(() => ok({ success: false }), { maxOutputBytes: 2_000 })
+    // Every other command fails, so half the calls keep a row and the rest are only counted.
+    let n = 0
+    const r = runner(() => ok(n++ % 2 ? { success: false } : {}), { maxOutputBytes: 2_000 })
     const reply = await r.execute(
       `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40), path: "/r" })
        return "\u65e5\u672c".repeat(3000)`,
@@ -369,7 +373,9 @@ describe("execute", () => {
     const body = JSON.parse(reply.text)
     expect(body.ok).toBe(true)
     expect(body.preview.length).toBeGreaterThan(0)
-    expect(body.calls.length + (body.callsOmitted ?? 0)).toBe(20)
+    expect(body.completed).toEqual({ "localforge.search": 10 })
+    expect(body.calls.length + (body.callsOmitted ?? 0)).toBe(10)
+    expect(body.calls.every((c: any) => c.status === "error")).toBe(true)
     expect(JSON.parse(readFileSync(body.spilled.path, "utf8")).value).toBe("\u65e5\u672c".repeat(3000))
   })
 
@@ -431,7 +437,7 @@ describe("execute", () => {
   })
 
   test("the cancelled or internal-error reply keeps to the cap too", async () => {
-    const r = runner(() => ok({ success: false }), { maxOutputBytes: 2_000 })
+    const r = runner(() => ok({}), { maxOutputBytes: 2_000 })
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 300)
     const reply = await r.execute(
@@ -442,6 +448,7 @@ describe("execute", () => {
     expect(Buffer.byteLength(reply.text)).toBeLessThanOrEqual(2_000)
     const body = JSON.parse(reply.text)
     expect(body.error.kind).toBe("Cancelled")
+    expect(body).not.toHaveProperty("completed")
     expect(body.calls.length + (body.callsOmitted ?? 0)).toBe(20)
   })
 

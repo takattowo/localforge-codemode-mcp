@@ -61,7 +61,7 @@ shell commands, with or without this server.
 - If LocalForge exits, every later call fails until Quick restarts this server.
 - Spilled files and the history file are never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
-- The reply lists only the calls that failed or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`. The history file keeps the program's code.
+- When a program succeeds, the reply lists only the calls that failed (including commands with `success: false`) or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`, keyed like `tool` (`localforge.git`). A failed, timed-out or cancelled run keeps every call's row, since it has no value to show what already happened. The history file keeps the program's code.
 - Cancelling a call in Quick stops the program and sends no reply, but a LocalForge command already running keeps going.
 - With `maxOutputBytes` under about 1 KB, a reply can still go over the cap.
 - Relative paths in `codemode.json` are resolved from the folder that holds it.
