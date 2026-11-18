@@ -39,21 +39,24 @@ const run = async (r: ReturnType<typeof createRunner>, code: string) => {
 describe("execute", () => {
   test("single call returns the program's value and logs the call", async () => {
     const r = runner((name, args) => ok({ tool: name, path: args.path, size: 42 }))
-    const { body, isError } = await run(r, `const s = await tools.localforge.filesystem({ action: "stat", path: "a.txt" }); return s.size`)
+    const { body, isError } = await run(r, `const s = await tools.localforge.filesystem({ action: "stat", path: "/r/a.txt" }); return s.size`)
     expect(isError).toBe(false)
     expect(body.ok).toBe(true)
     expect(body.value).toBe(42)
-    expect(body.calls).toEqual([{ tool: "localforge.filesystem", status: "completed", input: '{"action":"stat","path":"a.txt"}' }])
+    expect(body.calls).toEqual([{ tool: "localforge.filesystem", status: "completed", input: '{"action":"stat","path":"/r/a.txt"}' }])
   })
 
   test("chained calls feed one result into the next", async () => {
-    const files: Record<string, string> = { "a.ts": "export const a = 1", "b.ts": "export const b = 2" }
-    const r = runner((name, args) =>
-      name === "search" ? ok({ results: [{ path: "a.ts" }, { path: "b.ts" }] }) : ok({ content: files[args.path] }),
+    // LocalForge gives result paths under its own working folder relative to it; they must come back absolute.
+    const files: Record<string, string> = { "/r/a.ts": "export const a = 1", "/r/b.ts": "export const b = 2" }
+    const r = runner(
+      (name, args) =>
+        name === "search" ? ok({ results: [{ path: "a.ts" }, { path: "/r/b.ts" }] }) : ok({ content: files[args.path] }),
+      { cwd: "/r" },
     )
     const { body } = await run(
       r,
-      `const hits = await tools.localforge.search({ query: "export" })
+      `const hits = await tools.localforge.search({ query: "export", path: "/r" })
        const out = []
        for (const h of hits.results) out.push((await tools.localforge.filesystem({ action: "read", path: h.path })).content.length)
        return out`,
@@ -69,17 +72,17 @@ describe("execute", () => {
       peak = Math.max(peak, ++inFlight)
       await Bun.sleep(30)
       inFlight--
-      return args.path === "secret" ? refused("path_denied", "Denied path: secret") : ok({ path: args.path })
+      return args.path === "/r/secret" ? refused("path_denied", "Denied path: secret") : ok({ path: args.path })
     })
     const { body } = await run(
       r,
-      `const rs = await Promise.allSettled(["a", "secret", "b"].map((path) => tools.localforge.filesystem({ action: "stat", path })))
+      `const rs = await Promise.allSettled(["/r/a", "/r/secret", "/r/b"].map((path) => tools.localforge.filesystem({ action: "stat", path })))
        return rs.map((x) => x.status === "fulfilled" ? x.value.path : x.reason.message)`,
     )
     expect(peak).toBe(3)
-    expect(body.value[0]).toBe("a")
+    expect(body.value[0]).toBe("/r/a")
     expect(body.value[1]).toContain("path_denied: Denied path: secret")
-    expect(body.value[2]).toBe("b")
+    expect(body.value[2]).toBe("/r/b")
     expect(body.calls.map((c: any) => c.status)).toEqual(["completed", "error", "completed"])
   })
 
@@ -90,12 +93,14 @@ describe("execute", () => {
     const { body, isError } = await run(
       r,
       `let caught = null
-       try { await tools.localforge.git({ action: "nope" }) } catch (e) { caught = e.message }
-       const res = await tools.localforge.execute({ command: ["tests"] })
+       try { await tools.localforge.git({ action: "nope", cwd: "/r" }) } catch (e) { caught = e.message }
+       const res = await tools.localforge.execute({ command: ["tests"], cwd: "/r" })
        return { caught, exit: res.exit_code }`,
     )
     expect(isError).toBe(false)
     expect(body.value.caught).toContain("invalid_arguments: bad args")
+    // An argument mistake points at where the argument notes are.
+    expect(body.value.caught).toContain('search("localforge.git")')
     expect(body.value.exit).toBe(1)
     expect(body.calls.map((c: any) => [c.tool, c.status])).toEqual([
       ["localforge.git", "error"],
@@ -115,7 +120,7 @@ describe("execute", () => {
 
   test("maxToolCalls stops the program at the limit", async () => {
     const r = runner(() => ok({}), { maxToolCalls: 2 })
-    const { body } = await run(r, `for (let i = 0; i < 5; i++) await tools.localforge.git({ action: "status" }); return "done"`)
+    const { body } = await run(r, `for (let i = 0; i < 5; i++) await tools.localforge.git({ action: "status", cwd: "/r" }); return "done"`)
     expect(body.ok).toBe(false)
     expect(body.error.kind).toBe("ToolCallLimitExceeded")
     expect(body.calls).toHaveLength(2)
@@ -174,7 +179,7 @@ describe("execute", () => {
       await Bun.sleep(300)
       return ok({})
     })
-    const { body } = await run(r, `tools.localforge.git({ action: "status" }); return "left early"`)
+    const { body } = await run(r, `tools.localforge.git({ action: "status", cwd: "/r" }); return "left early"`)
     expect(body.value).toBe("left early")
     expect(body.calls.map((c: any) => c.status)).toEqual(["interrupted"])
   })
@@ -333,7 +338,7 @@ describe("execute", () => {
   test("each run appends one line to the history file", async () => {
     const historyFile = join(spillDir, "history", "runs.jsonl")
     const r = runner(() => ok({ content: "x".repeat(1000) }), { historyFile, maxOutputBytes: 1_000 })
-    await r.execute(`const f = await tools.localforge.filesystem({ action: "read", path: "a" }); return f.content.length`)
+    await r.execute(`const f = await tools.localforge.filesystem({ action: "read", path: "/r/a" }); return f.content.length`)
     await r.execute(`return "y".repeat(5000)`)
     await r.execute(`throw new Error("boom")`)
     const runs = readFileSync(historyFile, "utf8").trim().split("\n").map((line) => JSON.parse(line))
@@ -349,7 +354,7 @@ describe("execute", () => {
   test("a spilled reply stays under the cap with many calls and non-ASCII text", async () => {
     const r = runner(() => ok({}), { maxOutputBytes: 2_000 })
     const reply = await r.execute(
-      `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40) })
+      `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40), path: "/r" })
        return "\u65e5\u672c".repeat(3000)`,
     )
     expect(Buffer.byteLength(reply.text)).toBeLessThanOrEqual(2_000)
@@ -398,7 +403,7 @@ describe("execute", () => {
       await Bun.sleep(2_000)
       return ok({})
     }, { timeoutMs: 200 })
-    const { body } = await run(r, `await tools.localforge.git({ action: "status" }); return 1`)
+    const { body } = await run(r, `await tools.localforge.git({ action: "status", cwd: "/r" }); return 1`)
     expect(body.error.kind).toBe("TimeoutExceeded")
     expect(body.calls.map((c: any) => c.status)).toEqual(["interrupted"])
   })
@@ -422,7 +427,7 @@ describe("execute", () => {
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 300)
     const reply = await r.execute(
-      `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40) })
+      `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40), path: "/r" })
        while (true) {}`,
       { signal: controller.signal },
     )
@@ -439,7 +444,7 @@ describe("execute", () => {
     })
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 100)
-    const reply = await r.execute(`await tools.localforge.git({ action: "status" }); return 1`, { signal: controller.signal })
+    const reply = await r.execute(`await tools.localforge.git({ action: "status", cwd: "/r" }); return 1`, { signal: controller.signal })
     const body = JSON.parse(reply.text)
     expect(body.error.kind).toBe("Cancelled")
     expect(body.calls.map((c: any) => c.status)).toEqual(["interrupted"])
@@ -453,5 +458,70 @@ describe("execute", () => {
         expect(body.spilled).toBeDefined()
         expect(/[\ud800-\udbff]$/.test(body.preview)).toBe(false)
       }
+  })
+
+  test("relative or missing paths and cwds are refused before they reach LocalForge", async () => {
+    // LocalForge has one working folder per server, shared by every chat and task, so a relative path could
+    // land in another session's repo.
+    const seen: string[] = []
+    const r = runner((name) => {
+      seen.push(name)
+      return ok({ done: true })
+    })
+    const { body } = await run(
+      r,
+      `const tries = [
+         () => tools.localforge.filesystem({ action: "read", path: "src/a.ts" }),
+         () => tools.localforge.filesystem({ action: "list" }),
+         () => tools.localforge.filesystem({ action: "copy", path: "/r/a", destination: "b" }),
+         () => tools.localforge.search({ query: "x" }),
+         () => tools.localforge.search({ query: "x", path: "." }),
+         () => tools.localforge.multi_search({ searches: [{ query: "x", path: "/r" }, { query: "y" }] }),
+         () => tools.localforge.git({ action: "status" }),
+         () => tools.localforge.git({ action: "status", cwd: "repo" }),
+         () => tools.localforge.execute({ command: ["ls"] }),
+         () => tools.localforge.process({ action: "start", command: ["ls"] }),
+       ]
+       const out = []
+       for (const t of tries) { try { await t(); out.push("allowed") } catch (e) { out.push(e.message) } }
+       return out`,
+    )
+    expect(body.value).toHaveLength(10)
+    for (const message of body.value) expect(message).toContain("absolute")
+    expect(body.value[0]).toContain("localforge.filesystem")
+    expect(body.value[5]).toContain("searches[1] needs an absolute path")
+    expect(seen).toEqual([])
+    expect(body.calls.every((c: any) => c.status === "error")).toBe(true)
+
+    const fine = await run(
+      r,
+      `await tools.localforge.filesystem({ action: "stat", path: "D:\\\\r\\\\a" })
+       await tools.localforge.filesystem({ action: "stat", path: "D:/r/a" })
+       await tools.localforge.filesystem({ action: "stat", path: "\\\\\\\\srv\\\\share\\\\a" })
+       await tools.localforge.filesystem({ action: "copy", path: "/r/a", destination: "/r/b" })
+       await tools.localforge.multi_search({ searches: [{ query: "x", path: "/r" }] })
+       await tools.localforge.process({ action: "wait", process_id: "p1" })
+       await tools.localforge.process({ action: "start", command: ["ls"], cwd: "/r" })
+       return "ok"`,
+    )
+    expect(fine.body.value).toBe("ok")
+    expect(seen).toHaveLength(7)
+  })
+
+  test("relative result paths from search and multi_search come back absolute", async () => {
+    const r = runner(
+      (name) =>
+        name === "search"
+          ? ok({ results: [{ path: "src\\a.ts" }, { path: "D:\\x\\b.ts" }] })
+          : ok({ results: [{ label: "one", results: [{ path: "c.ts" }] }, { label: "bad", error: { code: "x" } }] }),
+      { cwd: "D:\\base\\" },
+    )
+    const { body } = await run(
+      r,
+      `const s = await tools.localforge.search({ query: "q", path: "D:\\\\base" })
+       const m = await tools.localforge.multi_search({ searches: [{ query: "q", path: "D:\\\\base" }] })
+       return [...s.results.map((x) => x.path), ...m.results.flatMap((e) => (e.results ?? []).map((x) => x.path))]`,
+    )
+    expect(body.value).toEqual(["D:\\base\\src\\a.ts", "D:\\x\\b.ts", "D:\\base\\c.ts"])
   })
 })

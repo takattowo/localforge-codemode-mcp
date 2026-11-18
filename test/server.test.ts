@@ -82,7 +82,8 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
           const own = await tools.localforge.filesystem({ action: "stat", path: ${JSON.stringify(own)} })
           let denied = "allowed"
           try { await tools.localforge.filesystem({ action: "stat", path: ${JSON.stringify(denied)} }) } catch (e) { denied = e.message }
-          return { own: own.path, denied }`
+          const hits = await tools.localforge.search({ query: "createRunner", path: ${JSON.stringify(join(root, "src"))} })
+          return { own: own.path, denied, hits: hits.results.map((h) => h.path) }`
 
         const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
           env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: testConfig },
@@ -128,7 +129,10 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
         expect(body.ok).toBe(true)
         expect(body.value.own).toBe(own)
         expect(body.value.denied).toContain("path_denied")
-        expect(body.calls.map((c: any) => c.status)).toEqual(["completed", "error"])
+        expect(body.calls.map((c: any) => c.status)).toEqual(["completed", "error", "completed"])
+        // Hits come back absolute whatever LocalForge's working folder is.
+        expect(body.value.hits).toContain(join(root, "src", "runner.ts"))
+        for (const hit of body.value.hits) expect(hit).toMatch(/^[A-Za-z]:[\\/]|^[\\/]/)
 
         expect(replies.has(4)).toBe(false)
 

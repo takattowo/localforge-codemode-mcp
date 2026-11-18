@@ -29,12 +29,19 @@ await localforge.request("initialize", {
 })
 localforge.notify("notifications/initialized")
 const { tools } = await localforge.request("tools/list")
+// This child's working folder never moves (programs can't call workspace), so read it once: search results under it
+// come back relative and are made absolute with it.
+const workingFolder = await localforge
+  .request("tools/call", { name: "workspace", arguments: { action: "get" } })
+  .then((r) => JSON.parse(r.content?.[0]?.text ?? "{}").cwd as string | undefined)
+  .catch(() => undefined)
 
 const timeoutMs = config.timeoutMs ?? 60_000
 const maxTimeoutMs = config.maxTimeoutMs ?? 300_000
 const runner = createRunner({
   tools,
   call: (name, args) => localforge.request("tools/call", { name, arguments: args }),
+  cwd: workingFolder,
   allowShell: config.allowShell ?? true,
   timeoutMs,
   maxTimeoutMs,
