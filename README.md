@@ -55,10 +55,10 @@ shell commands, with or without this server.
 
 ## Limits
 
-- Calls go to LocalForge as written. Needs localforge-mcp after 1.10.0, whose `require_absolute_paths` (on by default) refuses relative or missing locations with `relative_path` and returns absolute search hits; LocalForge has one working folder per server, shared by every chat and task. With that setting off, relative paths use LocalForge's working folder.
+- Calls go to LocalForge as written. Needs localforge-mcp at commit 9bd265d or later (newer than 1.10.0), whose `require_absolute_paths` (on by default) refuses relative or missing locations with `relative_path` and returns absolute search hits; LocalForge has one working folder per server, shared by every chat and task. With that setting off, relative paths use LocalForge's working folder.
 - A single regex match can't be interrupted by the timeout.
 - On timeout, an inner LocalForge call keeps running in LocalForge; only the program stops waiting for it.
-- If LocalForge exits, the calls in flight fail and the next call starts it again. Its tool list is read once at startup.
+- If LocalForge exits, the calls in flight fail and the next call starts it again; if that start fails, the calls waiting on it fail too and the one after tries again. Its tool list is read once at startup.
 - Spilled files and the history file are never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
 - When a program succeeds, the reply lists only the calls that failed (including commands with `success: false`) or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`, keyed like `tool` (`localforge.git`). A failed, timed-out or cancelled run keeps every call's row, since it has no value to show what already happened. The history file keeps the program's code.

@@ -77,27 +77,46 @@ export function startClient(command: string[], env: Record<string, string | unde
 
 /** Starts an MCP server and initializes it; if it exits, the next request starts and initializes a fresh one. */
 export function connect(command: string[], env: Record<string, string | undefined>, clientInfo: { name: string; version: string }) {
-  const start = async () => {
-    const client = startClient(command, env)
-    await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo })
-    client.notify("notifications/initialized")
-    return client
+  type Client = ReturnType<typeof startClient>
+  let stopped = false
+  // null: no start in progress or running; the next request starts one.
+  let current: Promise<Client> | null = null
+  const start = () => {
+    const starting = (async () => {
+      const client = startClient(command, env)
+      await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo })
+      client.notify("notifications/initialized")
+      return client
+    })()
+    current = starting
+    // A start that fails fails every request waiting on it; the next request starts again.
+    starting.catch(() => {
+      if (current === starting) current = null
+    })
+    return starting
   }
-  let current = start()
-  const ready = async () => {
-    const was = current
-    const client = await was.catch(() => undefined)
-    if (client && !client.closed) return client
-    // One restart for every request that finds it gone; a start that failed is tried again on the next request.
+  const notRunning = () => new Error("LocalForge is not running")
+  const ready = async (): Promise<Client> => {
+    if (stopped) throw notRunning()
+    const was = current ?? start()
+    const client = await was
+    if (stopped) throw notRunning()
+    if (!client.closed) return client
+    // One restart for every request that finds it gone.
     if (current === was) {
       console.error("localforge-codemode-mcp: LocalForge is not running; starting it again")
-      current = start()
+      start()
     }
-    return current
+    return ready()
   }
+  start()
   return {
     request: async (method: string, params?: Json) => (await ready()).request(method, params),
-    close: async () => (await current.catch(() => undefined))?.close(),
+    // Stops restarts first, then ends the child once its start (if any) settles.
+    close: () => {
+      stopped = true
+      current?.then((client) => client.close(), () => {})
+    },
   }
 }
 

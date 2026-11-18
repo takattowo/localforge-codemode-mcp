@@ -94,4 +94,4 @@ await serve(async (method, params, signal) => {
       throw rpcError(-32601, "Method not found")
   }
 })
-await localforge.close()
+localforge.close()
