@@ -162,6 +162,17 @@ describe("execute", () => {
     const failed = await run(runner(() => cut(null)), code)
     expect(failed.body.ok).toBe(false)
     expect(failed.body.error.message).toContain("max_result_bytes")
+    expect(failed.body.error.message).toContain("no absolute result_path")
+    // A relative path is not trusted either: it would be read from this server's own folder.
+    const relative = await run(runner(() => cut("lf-search-result-x.json")), code)
+    expect(relative.body.error.message).toContain("no absolute result_path")
+    // A path that is gone, and a file that is not JSON, each say which one it was.
+    const gone = await run(runner(() => cut(join(spillDir, "pruned.json"))), code)
+    expect(gone.body.error.message).toContain("could not be read")
+    const garbled = join(spillDir, "lf-garbled.json")
+    writeFileSync(garbled, "{not json")
+    const bad = await run(runner(() => cut(garbled)), code)
+    expect(bad.body.error.message).toContain("is not valid JSON")
   })
 
   test("batch, todo and workspace are hidden; execute and process only with allowShell", async () => {

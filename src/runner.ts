@@ -1,7 +1,8 @@
 import { CodeMode, Tool, toolError } from "@opencode/codemode"
 import { Effect } from "effect"
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { readFile } from "node:fs/promises"
+import { dirname, isAbsolute, join } from "node:path"
 
 export type McpTool = { name: string; description?: string; inputSchema?: object }
 export type CallResult = { content?: Array<{ type: string; text?: string }>; isError?: boolean }
@@ -61,12 +62,23 @@ const clipError = (e: { kind: string; message: string }, cap: number) => ({
 const failed = (v: any) => typeof v === "object" && v !== null && v.success === false
 // LocalForge cuts a result over its max_result_bytes to fit the host's relay; a program filters results itself, so it
 // gets the full copy LocalForge saved, or an error, never the cut one.
-const whole = (cut: any) => {
+const whole = async (cut: any) => {
+  const over = "result over LocalForge's max_result_bytes"
+  const why = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  const path = cut.result_path
+  // LocalForge always names an absolute file; anything else would be read from this server's own folder.
+  if (typeof path !== "string" || !isAbsolute(path))
+    throw new Error(`${over} and no absolute result_path to read the full copy from; narrow the call`)
+  let text: string
   try {
-    return JSON.parse(readFileSync(cut.result_path, "utf8"))
+    text = await readFile(path, "utf8")
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
-    throw new Error(`result over LocalForge's max_result_bytes and its full copy could not be read (${why}); narrow the call`)
+    throw new Error(`${over} and its full copy could not be read (${why(e)}); narrow the call`)
+  }
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    throw new Error(`${over} and its full copy at ${path} is not valid JSON (${why(e)}); narrow the call`)
   }
 }
 
