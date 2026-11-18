@@ -4,10 +4,13 @@ import { serve, startClient } from "./mcp"
 import { createRunner } from "./runner"
 
 const VERSION = "0.1.0"
+// shortcut: 2025-03-26 allowed JSON-RPC batches, which serve() answers with one -32600; add batch support if a client sends them.
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 const root = join(import.meta.dir, "..")
-const configPath = resolve(process.env.CODEMODE_CONFIG ?? join(root, "codemode.json"))
+const configPath = resolve(process.env.LOCALFORGE_CODEMODE_CONFIG ?? join(root, "codemode.json"))
 const config = JSON.parse(readFileSync(configPath, "utf8"))
+if (typeof config !== "object" || config === null || Array.isArray(config))
+  throw new Error(`${configPath} must hold a JSON object`)
 // Relative paths in the config are relative to the config file, not to wherever the host started this server.
 const fromConfig = (path: string) => resolve(dirname(configPath), path)
 

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path"
 import { lines } from "../src/mcp"
 
 const root = join(import.meta.dir, "..")
-const configPath = resolve(process.env.CODEMODE_CONFIG ?? join(root, "codemode.json"))
+const configPath = resolve(process.env.LOCALFORGE_CODEMODE_CONFIG ?? join(root, "codemode.json"))
 
 test("a config without mcpConfig fails with a clear message", async () => {
   const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
@@ -13,7 +13,7 @@ test("a config without mcpConfig fails with a clear message", async () => {
     const empty = join(dir, "codemode.json")
     writeFileSync(empty, "{}")
     const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
-      env: { ...process.env, CODEMODE_CONFIG: empty },
+      env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: empty },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -25,6 +25,27 @@ test("a config without mcpConfig fails with a clear message", async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 }, 20_000)
+
+test("a config that is not a JSON object fails with a clear message", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
+  try {
+    for (const content of ["null", "[]", "7"]) {
+      const bad = join(dir, "codemode.json")
+      writeFileSync(bad, content)
+      const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
+        env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: bad },
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      server.stdin.end()
+      expect(await server.exited).not.toBe(0)
+      expect(await new Response(server.stderr).text()).toContain(`${bad} must hold a JSON object`)
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 30_000)
 
 // Needs a real LocalForge, so it runs only where codemode.json (gitignored) points at one with a denied path.
 const denied = (() => {
@@ -51,7 +72,7 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
         return { own: own.path, denied }`
 
       const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
-        env: { ...process.env, CODEMODE_CONFIG: configPath },
+        env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: configPath },
         stdin: "pipe",
         stdout: "pipe",
         stderr: "inherit",

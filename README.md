@@ -29,7 +29,7 @@ Add a Local MCP connection in Quick:
 
 Use the full `bun.exe` path: Quick's PATH may not include `.bun\bin`. Restart Quick after adding it.
 
-## Config (`codemode.json`, or the path in `CODEMODE_CONFIG`)
+## Config (`codemode.json`, or the path in `LOCALFORGE_CODEMODE_CONFIG`)
 
 | Key | Default | |
 | --- | --- | --- |
@@ -61,5 +61,5 @@ shell commands, with or without this server.
 - Spilled files and the history file are never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
 - Cancelling a call in Quick stops the program and sends no reply, but a LocalForge command already running keeps going.
-- With `maxOutputBytes` under about 1 KB, a spilled reply can still go over the cap.
+- With `maxOutputBytes` under about 1 KB, a reply can still go over the cap.
 - Relative paths in `codemode.json` are resolved from the folder that holds it.

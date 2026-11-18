@@ -51,6 +51,11 @@ const safeJson = (v: unknown) => {
   }
 }
 const bytesOf = (v: unknown) => Buffer.byteLength(JSON.stringify(v))
+// Error messages in a capped reply get at most an eighth of the cap.
+const clipError = (e: { kind: string; message: string }, cap: number) => ({
+  kind: e.kind,
+  message: clip(e.message, Math.floor(cap / 8)),
+})
 const failed = (v: any) => typeof v === "object" && v !== null && v.success === false
 const callsPart = (all: Row[], kept: number) => ({
   calls: all.slice(0, kept),
@@ -151,7 +156,7 @@ export function createRunner(o: Options) {
         ? { kind: "Cancelled", message: "The run was cancelled." }
         : { kind: "InternalError", message: e instanceof Error ? e.message : String(e) }
       result = { ok: false, error }
-      const head = { ok: false, error: { kind: error.kind, message: clip(error.message, Math.floor(o.maxOutputBytes / 8)) } }
+      const head = { ok: false, error: clipError(error, o.maxOutputBytes) }
       const part = keepCalls(calls, o.maxOutputBytes, (p) => ({ ...head, ...p }))
       reply = { text: JSON.stringify({ ...head, ...part }), isError: true, spilled: false }
     }
@@ -193,7 +198,7 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
 
   // ok, error and the path come first; then as many call rows as fit; the preview gets whatever room is left.
   // shortcut: a cap under ~1 KB, or an error message near the cap, can still go over it.
-  const error = reply.error && { kind: reply.error.kind, message: clip(reply.error.message, Math.floor(cap / 8)) }
+  const error = reply.error && clipError(reply.error, cap)
   const head = { ok: reply.ok, ...(error ? { error } : {}), spilled: { path, bytes } }
   const part = keepCalls(reply.calls, cap, (p) => ({ ...head, ...p, preview: "" }))
   const envelope = (preview: string) => ({ ...head, ...part, preview })
