@@ -70,27 +70,48 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
   return callsPart(all, kept)
 }
 // Enum values of an argument, also behind anyOf/oneOf or a local $ref (pydantic Optional[Literal], Enum).
-const LOCAL_REF = /^#\/(?:\$defs|definitions)\/([^/]+)$/
-const enumOf = (v: any, defs: Record<string, any>, depth = 0): unknown[] => {
+// Only #/$defs/X or #/definitions/X, looked up in the table it names: other files or deeper pointers could match a
+// local name by accident.
+const LOCAL_REF = /^#\/(\$defs|definitions)\/([^/]+)$/
+type Defs = { $defs?: unknown; definitions?: unknown }
+// A JSON-pointer segment from a URI fragment: %-escapes first, then ~1 (/) and ~0 (~), as RFC 6901 says.
+const segment = (raw: string) => {
+  try {
+    return decodeURIComponent(raw).replaceAll("~1", "/").replaceAll("~0", "~")
+  } catch {
+    return undefined
+  }
+}
+const enumOf = (v: any, defs: Defs, depth = 0): unknown[] => {
   if (!v || typeof v !== "object" || depth > 4) return []
   if (Array.isArray(v.enum)) return v.enum
   if (typeof v.$ref === "string") {
-    // Only #/$defs/X or #/definitions/X: other files or deeper pointers could match a local name by accident.
-    const name = LOCAL_REF.exec(v.$ref)?.[1]
-    return name !== undefined && Object.hasOwn(defs, name) ? enumOf(defs[name], defs, depth + 1) : []
+    const m = LOCAL_REF.exec(v.$ref)
+    const table = m ? defs[m[1] as keyof Defs] : undefined
+    const name = m ? segment(m[2]!) : undefined
+    const found = name !== undefined && typeof table === "object" && table !== null && Object.hasOwn(table, name)
+    return found ? enumOf((table as Record<string, unknown>)[name], defs, depth + 1) : []
   }
   const members = [...(Array.isArray(v.anyOf) ? v.anyOf : []), ...(Array.isArray(v.oneOf) ? v.oneOf : [])]
   return members.flatMap((m) => enumOf(m, defs, depth + 1))
 }
-// A value as the model would type it: strings bare, anything else (null, numbers, objects) as JSON.
-const shown = (x: unknown) => (typeof x === "string" ? x : safeJson(x))
+const readsAsJson = (s: string) => {
+  try {
+    JSON.parse(s)
+    return true
+  } catch {
+    return false
+  }
+}
+// A value as the model would type it: strings bare unless they read as JSON ("null", "1"), so they can't be
+// mistaken for or merged with the value they spell; anything else (null, numbers, objects) as JSON.
+const shown = (x: unknown) => (typeof x === "string" && !readsAsJson(x) ? x : safeJson(x))
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
-  const s = (t.inputSchema ?? {}) as { properties?: Record<string, unknown>; required?: unknown; $defs?: object; definitions?: object }
+  const s = (t.inputSchema ?? {}) as { properties?: Record<string, unknown>; required?: unknown } & Defs
   const required = Array.isArray(s.required) ? s.required : []
-  const defs = { ...s.definitions, ...s.$defs }
   const args = Object.entries(s.properties ?? {}).map(([k, v]) => {
-    const values = [...new Set(enumOf(v, defs).map(shown))]
+    const values = [...new Set(enumOf(v, s).map(shown))]
     return `${k}${required.includes(k) ? "" : "?"}${values.length ? `: ${values.join("|")}` : ""}`
   })
   return `- ${t.name}({${args.join(", ")}})`

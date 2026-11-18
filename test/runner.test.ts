@@ -243,6 +243,33 @@ describe("execute", () => {
       ],
     })
     expect(odd.description).toContain('\n- git({mode?: a|b|c, val?: null|{"x":1}|s, far?, deep?})')
+
+    // Strings that read as JSON stay quoted, so they can't merge with the value they spell. A ref is looked up in
+    // the table it names, with %-escapes, ~1 and ~0 decoded; inherited or broken names give nothing.
+    const refs = runner(() => ok({}), {
+      tools: [
+        {
+          name: "git",
+          inputSchema: {
+            type: "object",
+            properties: {
+              lit: { enum: ["null", null, "1", 1, "a"] },
+              slash: { $ref: "#/$defs/a~1b" },
+              tilde: { $ref: "#/$defs/t~0" },
+              space: { $ref: "#/$defs/x%20y" },
+              other: { $ref: "#/definitions/Kind" },
+              ctor: { $ref: "#/$defs/constructor" },
+              proto: { $ref: "#/$defs/__proto__" },
+              bad: { $ref: "#/$defs/%E0%A4%A" },
+            },
+            $defs: { "a/b": { enum: ["s"] }, "t~": { enum: ["t"] }, "x y": { enum: ["y"] }, Kind: { enum: ["wrong"] } },
+          } as object,
+        },
+      ],
+    })
+    expect(refs.description).toContain(
+      '\n- git({lit?: "null"|null|"1"|1|a, slash?: s, tilde?: t, space?: y, other?, ctor?, proto?, bad?})',
+    )
   })
 
   test("the default description stays under Quick's 2,000-character limit, rules first", async () => {
