@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -203,6 +203,28 @@ describe("execute", () => {
     expect(body.value).toContain("Seconds to wait")
   })
 
+  test("enum values behind anyOf, oneOf or a local $ref still show in the tool line", async () => {
+    const nested = runner(() => ok({}), {
+      tools: [
+        {
+          name: "git",
+          inputSchema: {
+            type: "object",
+            properties: {
+              mode: { anyOf: [{ enum: ["a", "b"] }, { type: "null" }] },
+              kind: { $ref: "#/$defs/Kind" },
+              old: { oneOf: [{ $ref: "#/definitions/Old" }] },
+              loop: { $ref: "#/$defs/Loop" },
+            },
+            $defs: { Kind: { enum: ["x", "y"] }, Loop: { $ref: "#/$defs/Loop" } },
+            definitions: { Old: { enum: [1, 2] } },
+          } as object,
+        },
+      ],
+    })
+    expect(nested.description).toContain("\n- git({mode?: a|b, kind?: x|y, old?: 1|2, loop?})")
+  })
+
   test("the default description stays under Quick's 2,000-character limit, rules first", async () => {
     // Far bigger than LocalForge: 6 tools with 60 arguments each and an enum.
     const huge: McpTool[] = ["filesystem", "search", "multi_search", "git", "execute", "process"].map((name) => ({
@@ -217,12 +239,22 @@ describe("execute", () => {
         required: ["action"],
       },
     }))
-    const d = runner(() => ok({}), { tools: huge }).description
-    expect(d.length).toBeLessThanOrEqual(2_000)
-    expect(d).toStartWith("Run a JavaScript program")
-    expect(d).toContain("Limits: 5 s")
-    expect(d).toContain("\n- filesystem({action: read|write|list|delete, ")
-    expect(d).not.toContain("xxx")
+    const warn = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      runner(() => ok({}))
+      expect(warn).not.toHaveBeenCalled()
+      const d = runner(() => ok({}), { tools: huge }).description
+      expect(d).toHaveLength(2_000)
+      expect(d).toStartWith("Run a JavaScript program")
+      expect(d).toEndWith("...")
+      for (const rule of ["Limits: 5 s", "or return less", "waited on or stopped here", '\nArgument notes: return search("localforge.<tool>")'])
+        expect(d).toContain(rule)
+      expect(d).toContain("\n- filesystem({action: read|write|list|delete, ")
+      expect(d).not.toContain("xxx")
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("execute description cut"))).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   test("each run appends one line to the history file", async () => {

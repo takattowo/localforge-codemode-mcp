@@ -63,4 +63,4 @@ shell commands, with or without this server.
 - Cancelling a call in Quick stops the program and sends no reply, but a LocalForge command already running keeps going.
 - With `maxOutputBytes` under about 1 KB, a reply can still go over the cap.
 - Relative paths in `codemode.json` are resolved from the folder that holds it.
-- The default description has only a little room left under 2,000 characters; if LocalForge grows, the last tool lines are cut and the end-to-end test fails.
+- The default description has only about 10 characters left under 2,000; if LocalForge grows, the last tool lines are cut, a warning goes to stderr, and the end-to-end test fails.

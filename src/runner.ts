@@ -69,13 +69,23 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
   while (kept > 0 && bytesOf(make(callsPart(all, kept))) > cap) kept--
   return callsPart(all, kept)
 }
+// Enum values of an argument, also behind anyOf/oneOf or a local $ref (pydantic Optional[Literal], Enum).
+const enumOf = (v: any, defs: Record<string, any>, depth = 0): unknown[] => {
+  if (!v || typeof v !== "object" || depth > 4) return []
+  if (Array.isArray(v.enum)) return v.enum
+  if (typeof v.$ref === "string") return enumOf(defs[v.$ref.split("/").pop()!], defs, depth + 1)
+  const members = [...(Array.isArray(v.anyOf) ? v.anyOf : []), ...(Array.isArray(v.oneOf) ? v.oneOf : [])]
+  return members.flatMap((m) => enumOf(m, defs, depth + 1))
+}
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
-  const s = (t.inputSchema ?? {}) as { properties?: Record<string, { enum?: unknown[] }>; required?: unknown }
+  const s = (t.inputSchema ?? {}) as { properties?: Record<string, unknown>; required?: unknown; $defs?: object; definitions?: object }
   const required = Array.isArray(s.required) ? s.required : []
-  const args = Object.entries(s.properties ?? {}).map(
-    ([k, v]) => `${k}${required.includes(k) ? "" : "?"}${Array.isArray(v?.enum) ? `: ${v.enum.join("|")}` : ""}`,
-  )
+  const defs = { ...s.definitions, ...s.$defs }
+  const args = Object.entries(s.properties ?? {}).map(([k, v]) => {
+    const values = enumOf(v, defs)
+    return `${k}${required.includes(k) ? "" : "?"}${values.length ? `: ${values.join("|")}` : ""}`
+  })
   return `- ${t.name}({${args.join(", ")}})`
 }
 
@@ -217,9 +227,9 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
   const rules = [
     "Run a JavaScript program on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
     "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
-    "Calls take the same arguments and return the same JSON as the direct LocalForge tools. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. Use absolute paths. Processes started here belong to this server.",
+    "Calls take the same arguments and return the same JSON as direct LocalForge tools. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. Use absolute paths. Processes started here can only be waited on or stopped here.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]; interrupted calls may still finish. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit.`,
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]; interrupted calls may still finish. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [
@@ -233,6 +243,10 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
     'Argument notes: return search("localforge.<tool>") from a program. Tools, called as tools.localforge.<name>:',
     ...exposed.map(compact),
   ].join("\n")
-  // shortcut: a much bigger tool set loses its last tool lines here; list tools through search() if that happens.
-  return text.length <= QUICK_LIMIT ? text : text.slice(0, QUICK_LIMIT - 3) + "..."
+  if (text.length <= QUICK_LIMIT) return text
+  // shortcut: a much bigger tool set loses its last tool lines; list tools through search() if that happens.
+  console.error(
+    `localforge-codemode-mcp: execute description cut from ${text.length} to ${QUICK_LIMIT} characters; the last tool lines are missing`,
+  )
+  return text.slice(0, QUICK_LIMIT - 3) + "..."
 }
