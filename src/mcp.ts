@@ -54,7 +54,6 @@ export function startClient(command: string[], env: Record<string, string | unde
     } catch (e) {
       console.error(`localforge-codemode-mcp: lost the LocalForge output stream: ${e}`)
     } finally {
-      // shortcut: no restart after the child exits; every later call fails until the host restarts this server.
       closed = true
       for (const waiter of pending.values()) waiter.reject(new Error("LocalForge exited"))
       pending.clear()
@@ -70,6 +69,35 @@ export function startClient(command: string[], env: Record<string, string | unde
       }),
     notify: (method: string) => write({ jsonrpc: "2.0", method }),
     close: () => child.stdin.end(),
+    get closed() {
+      return closed
+    },
+  }
+}
+
+/** Starts an MCP server and initializes it; if it exits, the next request starts and initializes a fresh one. */
+export function connect(command: string[], env: Record<string, string | undefined>, clientInfo: { name: string; version: string }) {
+  const start = async () => {
+    const client = startClient(command, env)
+    await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo })
+    client.notify("notifications/initialized")
+    return client
+  }
+  let current = start()
+  const ready = async () => {
+    const was = current
+    const client = await was.catch(() => undefined)
+    if (client && !client.closed) return client
+    // One restart for every request that finds it gone; a start that failed is tried again on the next request.
+    if (current === was) {
+      console.error("localforge-codemode-mcp: LocalForge is not running; starting it again")
+      current = start()
+    }
+    return current
+  }
+  return {
+    request: async (method: string, params?: Json) => (await ready()).request(method, params),
+    close: async () => (await current.catch(() => undefined))?.close(),
   }
 }
 

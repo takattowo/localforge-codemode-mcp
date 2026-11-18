@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import { serve, startClient } from "./mcp"
+import { connect, serve } from "./mcp"
 import { createRunner } from "./runner"
 
 const VERSION = "0.1.0"
@@ -20,29 +20,18 @@ if (typeof config.mcpConfig !== "string") throw new Error(`mcpConfig is required
 const mcpConfig = fromConfig(config.mcpConfig)
 const entry = JSON.parse(readFileSync(mcpConfig, "utf8")).mcpServers?.[serverName]
 if (!entry?.command) throw new Error(`No "${serverName}" server with a command in ${mcpConfig}`)
-const localforge = startClient([entry.command, ...(entry.args ?? [])], { ...process.env, ...entry.env })
-
-await localforge.request("initialize", {
-  protocolVersion: "2025-06-18",
-  capabilities: {},
-  clientInfo: { name: "localforge-codemode-mcp", version: VERSION },
+const localforge = connect([entry.command, ...(entry.args ?? [])], { ...process.env, ...entry.env }, {
+  name: "localforge-codemode-mcp",
+  version: VERSION,
 })
-localforge.notify("notifications/initialized")
+// shortcut: the tool list is read once; a LocalForge restarted with new tools keeps the old list until Quick restarts this server.
 const { tools } = await localforge.request("tools/list")
-// This child's working folder never moves (programs can't call workspace), so read it once: search results under it
-// come back relative and are made absolute with it.
-const workingFolder = await localforge
-  .request("tools/call", { name: "workspace", arguments: { action: "get" } })
-  .then((r) => JSON.parse(r.content?.[0]?.text ?? "{}").cwd as string | undefined)
-  .catch(() => undefined)
-if (!workingFolder) console.error("localforge-codemode-mcp: could not read LocalForge's working folder; relative search hits stay relative")
 
 const timeoutMs = config.timeoutMs ?? 60_000
 const maxTimeoutMs = config.maxTimeoutMs ?? 300_000
 const runner = createRunner({
   tools,
   call: (name, args) => localforge.request("tools/call", { name, arguments: args }),
-  cwd: workingFolder,
   allowShell: config.allowShell ?? true,
   timeoutMs,
   maxTimeoutMs,
@@ -105,4 +94,4 @@ await serve(async (method, params, signal) => {
       throw rpcError(-32601, "Method not found")
   }
 })
-localforge.close()
+await localforge.close()

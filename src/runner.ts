@@ -20,8 +20,6 @@ export type Options = {
   fullCatalog?: boolean
   /** One JSON line per run (code, outcome, bytes in and out), for measuring; unset writes none. */
   historyFile?: string
-  /** LocalForge's own working folder: relative result paths from search and multi_search are made absolute with it. */
-  cwd?: string
 }
 type Row = { tool: string; status: "running" | "completed" | "error" | "interrupted"; input: string }
 
@@ -62,74 +60,6 @@ const clipError = (e: { kind: string; message: string }, cap: number) => ({
 })
 const failed = (v: any) => typeof v === "object" && v !== null && v.success === false
 
-// LocalForge has one working folder per server, shared by every chat and task (a set_cwd anywhere moves it), so a
-// relative path or a missing cwd could land in another session's repo. Inner calls must name absolute locations.
-const DRIVE_OR_UNC = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/
-// One leading slash names a root only on POSIX; on Windows it follows the current drive, which moves with the shared
-// working folder. LocalForge's working folder tells which applies; without one, the host OS does.
-const isAbsolute = (p: string, cwd: string | undefined) =>
-  DRIVE_OR_UNC.test(p) || ((cwd !== undefined ? cwd.startsWith("/") : process.platform !== "win32") && p.startsWith("/"))
-const SHARED = " (LocalForge's working folder is shared with other chats, so a relative one could hit another repo)"
-// Each argument that names a location, with LocalForge's aliases, and whether the call needs one.
-const LOCATIONS: Record<string, Array<{ keys: string[]; required: (input: any) => boolean }>> = {
-  filesystem: [
-    { keys: ["path", "file", "target"], required: () => true },
-    { keys: ["destination", "dest"], required: () => false },
-  ],
-  search: [{ keys: ["path"], required: () => true }],
-  git: [{ keys: ["cwd"], required: () => true }],
-  execute: [{ keys: ["cwd"], required: () => true }],
-  process: [{ keys: ["cwd"], required: (input) => input.action === "start" }],
-}
-// filesystem and search (and each multi_search entry) may instead name relative paths under an absolute cwd.
-const CWD_RULE: (typeof LOCATIONS)[string] = [{ keys: ["cwd"], required: () => true }]
-const locationProblem = (tool: string, where: string, input: any, cwd: string | undefined) => {
-  const underCwd = tool === "filesystem" || tool === "search"
-  const rules = underCwd && input.cwd != null ? CWD_RULE : LOCATIONS[tool]!
-  const or = (k: string) => (underCwd && k !== "cwd" ? " (or an absolute cwd)" : "")
-  for (const { keys, required } of rules) {
-    // null means "not given", as LocalForge treats it.
-    const given = keys.filter((k) => input[k] != null)
-    if (given.length === 0 && required(input))
-      return `relative_path: ${where} needs an absolute ${keys[0]}${or(keys[0]!)}${SHARED}`
-    for (const k of given) {
-      const v = input[k]
-      if (typeof v !== "string" || !isAbsolute(v, cwd))
-        return `relative_path: ${where} ${k} must be an absolute path, got ${clip(safeJson(v), 80)}${or(k)}${SHARED}`
-    }
-  }
-  return undefined
-}
-const pathProblem = (tool: string, input: any, cwd: string | undefined): string | undefined => {
-  if (!input || typeof input !== "object") return undefined
-  if (tool === "multi_search") {
-    const searches = Array.isArray(input.searches) ? input.searches : []
-    for (const [i, s] of searches.entries()) {
-      const problem = locationProblem("search", `localforge.multi_search searches[${i}]`, s ?? {}, cwd)
-      if (problem) return problem
-    }
-    return undefined
-  }
-  return LOCATIONS[tool] ? locationProblem(tool, `localforge.${tool}`, input, cwd) : undefined
-}
-// LocalForge shows result paths under the folder a search ran from (the call's cwd, else its own) relative to it;
-// a program only sees absolute ones.
-const absolutePaths = (tool: string, value: any, input: any, cwd: string | undefined) => {
-  if (!value || typeof value !== "object") return value
-  const fix = (results: unknown, own: unknown) => {
-    const from = typeof own === "string" ? own : cwd
-    if (!from || !Array.isArray(results)) return
-    const sep = from.includes("\\") ? "\\" : "/"
-    const base = from.replace(/[\\/]+$/, "")
-    for (const r of results)
-      if (r && typeof r === "object" && typeof r.path === "string" && !isAbsolute(r.path, cwd))
-        r.path = base + sep + r.path.replace(/[\\/]/g, sep)
-  }
-  if (tool === "search") fix(value.results, input?.cwd)
-  if (tool === "multi_search" && Array.isArray(value.results))
-    value.results.forEach((e: any, i: number) => fix(e?.results, input?.searches?.[i]?.cwd))
-  return value
-}
 // A completed call only as a count per tool: its row costs ~150-200 bytes and the program already has its result.
 // Only for a run that succeeded: a failed run has no value, so its rows show which side effects happened.
 const logOf = (all: Row[], ok: boolean) => {
@@ -216,11 +146,10 @@ export function createRunner(o: Options) {
           execute: (input: unknown) =>
             Effect.tryPromise({
               try: async () => {
-                const problem = pathProblem(t.name, input, o.cwd)
-                if (problem) throw new Error(problem)
+                // Paths go as written: LocalForge refuses relative ones (relative_path) and returns absolute hits.
                 const r = await o.call(t.name, input)
                 const value = parse(textOf(r))
-                if (!r.isError) return absolutePaths(t.name, value, input, o.cwd)
+                if (!r.isError) return value
                 if (!(value?.code && value?.message)) throw new Error(textOf(r))
                 // An argument mistake: point at the notes the short tool line leaves out.
                 const hint = value.code === "invalid_arguments" ? ` (argument notes: search("localforge.${t.name}"))` : ""

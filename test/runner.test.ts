@@ -28,8 +28,6 @@ const runner = (call: (name: string, args: any) => CallResult | Promise<CallResu
     maxToolCalls: 50,
     maxOutputBytes: 30_000,
     spillDir,
-    // LocalForge's working folder; POSIX style, so a leading / counts as absolute in these tests.
-    cwd: "/r",
     ...limits,
   })
 
@@ -52,12 +50,9 @@ describe("execute", () => {
   })
 
   test("chained calls feed one result into the next", async () => {
-    // LocalForge gives result paths under its own working folder relative to it; they must come back absolute.
     const files: Record<string, string> = { "/r/a.ts": "export const a = 1", "/r/b.ts": "export const b = 2" }
-    const r = runner(
-      (name, args) =>
-        name === "search" ? ok({ results: [{ path: "a.ts" }, { path: "/r/b.ts" }] }) : ok({ content: files[args.path] }),
-      { cwd: "/r" },
+    const r = runner((name, args) =>
+      name === "search" ? ok({ results: [{ path: "/r/a.ts" }, { path: "/r/b.ts" }] }) : ok({ content: files[args.path] }),
     )
     const { body } = await run(
       r,
@@ -475,128 +470,24 @@ describe("execute", () => {
       }
   })
 
-  test("relative or missing paths and cwds are refused before they reach LocalForge", async () => {
-    // LocalForge has one working folder per server, shared by every chat and task, so a relative path could
-    // land in another session's repo.
-    const seen: string[] = []
-    const r = runner((name) => {
-      seen.push(name)
-      return ok({ done: true })
+  test("paths go to LocalForge as written, and its relative_path refusal reaches the program", async () => {
+    // LocalForge (require_absolute_paths, on by default) refuses relative locations and returns absolute hits itself.
+    const seen: unknown[] = []
+    const r = runner((name, args) => {
+      seen.push(args)
+      return name === "search"
+        ? ok({ results: [{ path: "src\\a.ts" }] })
+        : refused("relative_path", "filesystem read needs an absolute path, or an absolute cwd (got 'a')")
     })
     const { body } = await run(
       r,
-      `const tries = [
-         () => tools.localforge.filesystem({ action: "read", path: "src/a.ts" }),
-         () => tools.localforge.filesystem({ action: "list" }),
-         () => tools.localforge.filesystem({ action: "copy", path: "/r/a", destination: "b" }),
-         () => tools.localforge.search({ query: "x" }),
-         () => tools.localforge.search({ query: "x", path: "." }),
-         () => tools.localforge.multi_search({ searches: [{ query: "x", path: "/r" }, { query: "y" }] }),
-         () => tools.localforge.git({ action: "status" }),
-         () => tools.localforge.git({ action: "status", cwd: "repo" }),
-         () => tools.localforge.execute({ command: ["ls"] }),
-         () => tools.localforge.process({ action: "start", command: ["ls"] }),
-         () => tools.localforge.filesystem({ action: "read", file: "src/a.ts" }),
-         () => tools.localforge.filesystem({ action: "copy", path: "/r/a", dest: "b" }),
-         () => tools.localforge.git({ action: "status", cwd: null }),
-         () => tools.localforge.filesystem({ action: "read", path: "a", cwd: "r" }),
-       ]
-       const out = []
-       for (const t of tries) { try { await t(); out.push("allowed") } catch (e) { out.push(e.message) } }
-       return out`,
+      `const hits = await tools.localforge.search({ query: "q", path: "src" })
+       let refusal = null
+       try { await tools.localforge.filesystem({ action: "read", path: "a" }) } catch (e) { refusal = e.message }
+       return { hits: hits.results.map((h) => h.path), refusal }`,
     )
-    expect(body.value).toHaveLength(14)
-    for (const message of body.value) expect(message).toStartWith("relative_path: ")
-    for (const message of body.value) expect(message).toContain("absolute")
-    expect(body.value[0]).toContain("localforge.filesystem")
-    // filesystem and search may take a relative path under an absolute cwd instead.
-    expect(body.value[0]).toContain("or an absolute cwd")
-    expect(body.value[13]).toContain("cwd must be an absolute path")
-    expect(body.value[5]).toContain("searches[1] needs an absolute path")
-    expect(seen).toEqual([])
-    expect(body.calls.every((c: any) => c.status === "error")).toBe(true)
-
-    const fine = await run(
-      r,
-      `await tools.localforge.filesystem({ action: "stat", path: "D:\\\\r\\\\a" })
-       await tools.localforge.filesystem({ action: "stat", path: "D:/r/a" })
-       await tools.localforge.filesystem({ action: "stat", path: "\\\\\\\\srv\\\\share\\\\a" })
-       await tools.localforge.filesystem({ action: "copy", path: "/r/a", destination: "/r/b" })
-       await tools.localforge.multi_search({ searches: [{ query: "x", path: "/r" }] })
-       await tools.localforge.process({ action: "wait", process_id: "p1" })
-       await tools.localforge.process({ action: "start", command: ["ls"], cwd: "/r" })
-       await tools.localforge.filesystem({ action: "stat", file: "/r/a", destination: null })
-       await tools.localforge.git({ action: "status", cwd: "/r", args: null })
-       await tools.localforge.filesystem({ action: "read", path: "src/a.ts", cwd: "/r" })
-       await tools.localforge.filesystem({ action: "copy", path: "a", destination: "b", cwd: "/r" })
-       await tools.localforge.search({ query: "x", cwd: "/r" })
-       await tools.localforge.multi_search({ searches: [{ query: "x", path: "src", cwd: "/r" }] })
-       return "ok"`,
-    )
-    expect(fine.body.value).toBe("ok")
-    expect(seen).toHaveLength(13)
-  })
-
-  test("relative hits under a call's own cwd come back absolute from that cwd", async () => {
-    const r = runner(
-      (name) => (name === "search" ? ok({ results: [{ path: "a.ts" }] }) : ok({ results: [{ results: [{ path: "b.ts" }] }] })),
-      { cwd: "/base" },
-    )
-    const { body } = await run(
-      r,
-      `const s = await tools.localforge.search({ query: "q", cwd: "/other" })
-       const m = await tools.localforge.multi_search({ searches: [{ query: "q", cwd: "/third/" }] })
-       return [s.results[0].path, m.results[0].results[0].path]`,
-    )
-    expect(body.value).toEqual(["/other/a.ts", "/third/b.ts"])
-  })
-
-  test("on a Windows working folder, a path starting with one slash is drive-relative and refused", async () => {
-    const seen: string[] = []
-    const r = runner(
-      (name) => {
-        seen.push(name)
-        return ok({})
-      },
-      { cwd: "D:\\work" },
-    )
-    const { body } = await run(
-      r,
-      `const out = []
-       for (const path of ["/d/x", "\\\\x", "D:\\\\x", "d:/x", "\\\\\\\\srv\\\\share\\\\x", "//srv/share/x"]) {
-         try { await tools.localforge.filesystem({ action: "stat", path }); out.push("allowed") } catch (e) { out.push(e.message.split(":")[0]) }
-       }
-       return out`,
-    )
-    expect(body.value).toEqual(["relative_path", "relative_path", "allowed", "allowed", "allowed", "allowed"])
-    expect(seen).toHaveLength(4)
-  })
-
-  test("relative result paths from search and multi_search come back absolute", async () => {
-    const r = runner(
-      (name) =>
-        name === "search"
-          ? ok({ results: [{ path: "src\\a.ts" }, { path: "D:\\x\\b.ts" }] })
-          : ok({ results: [{ label: "one", results: [{ path: "c.ts" }] }, { label: "bad", error: { code: "x" } }] }),
-      { cwd: "D:\\base\\" },
-    )
-    const { body } = await run(
-      r,
-      `const s = await tools.localforge.search({ query: "q", path: "D:\\\\base" })
-       const m = await tools.localforge.multi_search({ searches: [{ query: "q", path: "D:\\\\base" }] })
-       return [...s.results.map((x) => x.path), ...m.results.flatMap((e) => (e.results ?? []).map((x) => x.path))]`,
-    )
-    expect(body.value).toEqual(["D:\\base\\src\\a.ts", "D:\\x\\b.ts", "D:\\base\\c.ts"])
-
-    // A relative hit takes the working folder's separator.
-    const posix = runner(() => ok({ results: [{ path: "src\\a.ts" }] }), { cwd: "/base/" })
-    const p = await run(posix, `return (await tools.localforge.search({ query: "q", path: "/base" })).results[0].path`)
-    expect(p.body.value).toBe("/base/src/a.ts")
-  })
-
-  test("without a known working folder, relative hits are left as they are", async () => {
-    const r = runner(() => ok({ results: [{ path: "src\\a.ts" }] }), { cwd: undefined })
-    const { body } = await run(r, `return (await tools.localforge.search({ query: "q", path: "D:\\\\r" })).results[0].path`)
-    expect(body.value).toBe("src\\a.ts")
+    expect(seen).toEqual([{ query: "q", path: "src" }, { action: "read", path: "a" }])
+    expect(body.value.hits).toEqual(["src\\a.ts"])
+    expect(body.value.refusal).toBe("relative_path: filesystem read needs an absolute path, or an absolute cwd (got 'a')")
   })
 })

@@ -55,10 +55,10 @@ shell commands, with or without this server.
 
 ## Limits
 
-- Inner calls must name absolute locations: filesystem `path` and `destination`, the `path` of a search and of each multi_search entry, git and execute `cwd`, process start `cwd`. filesystem, search and multi_search entries may instead pass an absolute `cwd` and relative paths under it (LocalForge after 1.10.0; 1.10.0 itself refuses `cwd` there as an unknown argument). Relative or missing ones are refused with `relative_path`, because LocalForge has one working folder per server, shared by every chat and task. On Windows a path starting with a single `\` or `/` counts as relative: it follows the current drive. Search results come back with absolute paths: from the call's `cwd` when it has one, else from LocalForge's working folder when the server could read it at startup (it logs to stderr when it couldn't).
+- Calls go to LocalForge as written. Needs localforge-mcp after 1.10.0, whose `require_absolute_paths` (on by default) refuses relative or missing locations with `relative_path` and returns absolute search hits; LocalForge has one working folder per server, shared by every chat and task. With that setting off, relative paths use LocalForge's working folder.
 - A single regex match can't be interrupted by the timeout.
 - On timeout, an inner LocalForge call keeps running in LocalForge; only the program stops waiting for it.
-- If LocalForge exits, every later call fails until Quick restarts this server.
+- If LocalForge exits, the calls in flight fail and the next call starts it again. Its tool list is read once at startup.
 - Spilled files and the history file are never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
 - When a program succeeds, the reply lists only the calls that failed (including commands with `success: false`) or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`, keyed like `tool` (`localforge.git`). A failed, timed-out or cancelled run keeps every call's row, since it has no value to show what already happened. The history file keeps the program's code.

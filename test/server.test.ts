@@ -68,7 +68,7 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
       const testConfig = join(dir, "codemode.json")
       const testHistory = join(dir, "runs.jsonl")
       // LocalForge restores its working folder from its state file. Pin it to this repo on a copy of its config, so
-      // search hits under the repo come back relative and the server's path fix is always exercised.
+      // search hits are under its working folder and LocalForge's own absolute-path rule is always exercised.
       const name = real.server ?? "localforge-mcp"
       const lf = JSON.parse(readFileSync(resolve(dirname(configPath), real.mcpConfig), "utf8")).mcpServers[name]
       const stateFile = join(dir, "state.json")
@@ -92,8 +92,10 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
           const own = await tools.localforge.filesystem({ action: "stat", path: ${JSON.stringify(own)} })
           let denied = "allowed"
           try { await tools.localforge.filesystem({ action: "stat", path: ${JSON.stringify(denied)} }) } catch (e) { denied = e.message }
+          let relative = "allowed"
+          try { await tools.localforge.filesystem({ action: "stat", path: "package.json" }) } catch (e) { relative = e.message }
           const hits = await tools.localforge.search({ query: "createRunner", path: ${JSON.stringify(join(root, "src"))} })
-          return { own: own.path, denied, hits: hits.results.map((h) => h.path) }`
+          return { own: own.path, denied, relative, hits: hits.results.map((h) => h.path) }`
 
         const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
           env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: testConfig },
@@ -140,7 +142,10 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
         expect(body.value.own).toBe(own)
         expect(body.value.denied).toContain("path_denied")
         expect(body.completed).toEqual({ "localforge.filesystem": 1, "localforge.search": 1 })
-        expect(body.calls.map((c: any) => c.status)).toEqual(["error"])
+        expect(body.calls.map((c: any) => c.status)).toEqual(["error", "error"])
+        // LocalForge itself refuses a relative path (its message quotes the path in single quotes).
+        expect(body.value.relative).toStartWith("relative_path: ")
+        expect(body.value.relative).toContain("got 'package.json'")
         // Hits come back absolute whatever LocalForge's working folder is.
         expect(body.value.hits).toContain(join(root, "src", "runner.ts"))
         for (const hit of body.value.hits) expect(hit).toMatch(/^[A-Za-z]:[\\/]|^[\\/]/)
