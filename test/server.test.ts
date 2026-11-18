@@ -7,43 +7,36 @@ import { lines } from "../src/mcp"
 const root = join(import.meta.dir, "..")
 const configPath = resolve(process.env.LOCALFORGE_CODEMODE_CONFIG ?? join(root, "codemode.json"))
 
-test("a config without mcpConfig fails with a clear message", async () => {
+// Starts the server with a config file holding `content` and returns how it ended.
+const startWith = async (content: string) => {
   const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
   try {
-    const empty = join(dir, "codemode.json")
-    writeFileSync(empty, "{}")
+    const path = join(dir, "codemode.json")
+    writeFileSync(path, content)
     const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
-      env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: empty },
+      env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: path },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
     })
     server.stdin.end()
-    expect(await server.exited).not.toBe(0)
-    expect(await new Response(server.stderr).text()).toContain(`mcpConfig is required in ${empty}`)
+    return { path, code: await server.exited, stderr: await new Response(server.stderr).text() }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+test("a config without mcpConfig fails with a clear message", async () => {
+  const { path, code, stderr } = await startWith("{}")
+  expect(code).not.toBe(0)
+  expect(stderr).toContain(`mcpConfig is required in ${path}`)
 }, 20_000)
 
 test("a config that is not a JSON object fails with a clear message", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
-  try {
-    for (const content of ["null", "[]", "7"]) {
-      const bad = join(dir, "codemode.json")
-      writeFileSync(bad, content)
-      const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
-        env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: bad },
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      server.stdin.end()
-      expect(await server.exited).not.toBe(0)
-      expect(await new Response(server.stderr).text()).toContain(`${bad} must hold a JSON object`)
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+  for (const content of ["null", "[]", "7"]) {
+    const { path, code, stderr } = await startWith(content)
+    expect(code).not.toBe(0)
+    expect(stderr).toContain(`${path} must hold a JSON object`)
   }
 }, 30_000)
 
