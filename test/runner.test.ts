@@ -134,9 +134,9 @@ describe("execute", () => {
 
   test("batch, todo and workspace are hidden; execute and process only with allowShell", async () => {
     const shellOff = runner(() => ok({}), { allowShell: false })
-    for (const name of ["batch", "todo", "workspace", "execute", "process"]) expect(shellOff.description).not.toContain(`tools.localforge.${name}(`)
-    for (const name of ["filesystem", "search", "multi_search", "git"]) expect(shellOff.description).toContain(`tools.localforge.${name}(`)
-    expect(runner(() => ok({})).description).toContain("tools.localforge.execute(")
+    for (const name of ["batch", "todo", "workspace", "execute", "process"]) expect(shellOff.description).not.toContain(`\n- ${name}(`)
+    for (const name of ["filesystem", "search", "multi_search", "git"]) expect(shellOff.description).toContain(`\n- ${name}(`)
+    expect(runner(() => ok({})).description).toContain("\n- execute(")
     const { body } = await run(shellOff, `return await tools.localforge.batch({ calls: [] })`)
     expect(body.ok).toBe(false)
     expect(body.calls).toEqual([])
@@ -161,7 +161,7 @@ describe("execute", () => {
     expect(capped.ms).toBeLessThan(3_000)
     expect(r.description).toContain("timeout_seconds")
     // A default above the cap is advertised as the cap, which is what a run gets.
-    expect(runner(() => ok({}), { timeoutMs: 900, maxTimeoutMs: 700 }).description).toContain("0.7 s per program")
+    expect(runner(() => ok({}), { timeoutMs: 900, maxTimeoutMs: 700 }).description).toContain("Limits: 0.7 s")
   })
 
   test("a call still running when the program ends is logged as interrupted", async () => {
@@ -189,15 +189,35 @@ describe("execute", () => {
       },
     ]
     const lean = runner(() => ok({}), { tools: described })
-    expect(lean.description).toContain("tools.localforge.execute(")
-    expect(lean.description).toContain("timeout?: number")
-    expect(lean.description).toContain("description?: string")
+    expect(lean.description).toContain("\n- execute({timeout?, description?})")
     expect(lean.description).not.toContain("Note text")
     expect(lean.description).not.toContain("Seconds to wait")
     expect(runner(() => ok({}), { tools: described, fullCatalog: true }).description).toContain("Seconds to wait")
     const { body } = await run(lean, `return JSON.stringify(search("localforge.execute"))`)
     expect(body.ok).toBe(true)
     expect(body.value).toContain("Seconds to wait")
+  })
+
+  test("the default description stays under Quick's 2,000-character limit, rules first", async () => {
+    // Far bigger than LocalForge: 6 tools with 60 arguments each and an enum.
+    const huge: McpTool[] = ["filesystem", "search", "multi_search", "git", "execute", "process"].map((name) => ({
+      name,
+      description: "x".repeat(3000),
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries([
+          ["action", { type: "string", enum: ["read", "write", "list", "delete"] }],
+          ...Array.from({ length: 60 }, (_, i) => [`argument_number_${i}`, { type: "string" }]),
+        ]),
+        required: ["action"],
+      },
+    }))
+    const d = runner(() => ok({}), { tools: huge }).description
+    expect(d.length).toBeLessThanOrEqual(2_000)
+    expect(d).toStartWith("Run a JavaScript program")
+    expect(d).toContain("Limits: 5 s")
+    expect(d).toContain("\n- filesystem({action: read|write|list|delete, ")
+    expect(d).not.toContain("xxx")
   })
 
   test("each run appends one line to the history file", async () => {

@@ -32,6 +32,8 @@ const SHELL = new Set(["execute", "process"])
 const VALUE_CEILING = 5_000_000
 const INPUT_CHARS = 160
 const DESCRIPTION_CHARS = 500
+// Quick cuts a tool description at about 2,048 characters, so the default description stays under this.
+const QUICK_LIMIT = 2_000
 
 const textOf = (r: CallResult) => (r.content ?? []).map((c) => c.text ?? "").join("")
 const parse = (text: string): any => {
@@ -67,27 +69,25 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
   while (kept > 0 && bytesOf(make(callsPart(all, kept))) > cap) kept--
   return callsPart(all, kept)
 }
-// A schema without its notes: only string `description` keywords go, so an argument named description stays.
-const withoutNotes = (s: any): any =>
-  Array.isArray(s)
-    ? s.map(withoutNotes)
-    : s && typeof s === "object"
-      ? Object.fromEntries(
-          Object.entries(s)
-            .filter(([k, v]) => !(k === "description" && typeof v === "string"))
-            .map(([k, v]) => [k, withoutNotes(v)]),
-        )
-      : s
+// One short line per tool: argument names (? when optional) and enum values, no notes.
+const compact = (t: McpTool) => {
+  const s = (t.inputSchema ?? {}) as { properties?: Record<string, { enum?: unknown[] }>; required?: string[] }
+  const args = Object.entries(s.properties ?? {}).map(
+    ([k, v]) => `${k}${s.required?.includes(k) ? "" : "?"}${Array.isArray(v?.enum) ? `: ${v.enum.join("|")}` : ""}`,
+  )
+  return `- ${t.name}({${args.join(", ")}})`
+}
 
 export function createRunner(o: Options) {
   const exposed = o.tools.filter((t) => !HIDDEN.has(t.name) && (o.allowShell || !SHELL.has(t.name)))
-  const build = (schemaOf: (t: McpTool) => object) =>
-    Object.fromEntries(
+  // Programs run against the full schemas, so search() inside a program shows every argument's notes.
+  const tree = {
+    localforge: Object.fromEntries(
       exposed.map((t) => [
         t.name,
         Tool.make({
           description: t.description ?? "",
-          input: schemaOf(t) as Tool.JsonSchema,
+          input: (t.inputSchema ?? { type: "object" }) as Tool.JsonSchema,
           // Any JSON. Without an output schema codemode hands the script null.
           output: {},
           execute: (input: unknown) =>
@@ -102,12 +102,9 @@ export function createRunner(o: Options) {
             }),
         }),
       ]),
-    )
-  const full = (t: McpTool) => t.inputSchema ?? { type: "object" }
-  // Programs run against the full schemas, so search() inside a program still shows every argument's notes.
-  const tree = { localforge: build(full) }
-  const listed = o.fullCatalog ? tree : { localforge: build((t) => withoutNotes(full(t))) }
-  const description = describe(CodeMode.make({ tools: listed }).catalog, o)
+    ),
+  }
+  const description = describe(CodeMode.make({ tools: tree }).catalog, exposed, o)
 
   async function execute(code: string, options: { timeoutMs?: number; signal?: AbortSignal } = {}) {
     const asked = options.timeoutMs
@@ -215,25 +212,26 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
   return { text: JSON.stringify(envelope(text.slice(0, low))), isError: !reply.ok, spilled: true }
 }
 
-function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, o: Options) {
-  const shell = o.allowShell
-  return [
-    "Run a JavaScript program on the user's PC that calls LocalForge tools, and get back only its return value. Use it to chain dependent calls in one step and to cut big results (search hits, file contents, command output) down before they reach you.",
-    "Send plain JavaScript (not TypeScript) in `code`, without a code fence. There are no imports, require, fetch, timers or direct file access: everything outside goes through the `tools.localforge.*` functions listed below, which take the same arguments and return the same JSON as the direct LocalForge tools.",
-    "End with an explicit `return` of only what you need. Await every call that matters: calls still pending when the program ends are interrupted. Run independent calls together with `Promise.allSettled`.",
-    "A refused or invalid call (for example path_denied) rejects its promise, so catch it or use allSettled. A command that runs but fails resolves normally with `success: false`; check it.",
-    ...(shell ? ["Write shell commands as literal strings or argv arrays in the program; do not build them from tool results."] : []),
-    "Use absolute paths. Processes started here belong to this server: wait on or stop them from here, not with the direct LocalForge tools.",
-    ...(o.fullCatalog
-      ? []
-      : [
-          'Argument notes are left out below. When unsure about an argument (its unit, format or limits), `search("localforge.<tool>")` inside a program returns that tool\'s full signature with notes; it counts as a tool call.',
-        ]),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s per program (pass timeout_seconds, up to ${o.maxTimeoutMs / 1000}, for long builds or tests) and ${o.maxToolCalls} tool calls.`,
-    "The reply is JSON: ok, then value or error, logs and warnings when there are any, and calls, which lists every tool call with its status: completed, error (including ones the program caught), or interrupted (still running when the program ended; LocalForge may still finish it).",
-    `A reply over ${o.maxOutputBytes} bytes is saved to a file instead. You then get ok, error (if any), spilled {path, bytes}, the calls that fit (callsOmitted counts the rest) and preview, the start of the full reply; read the file with LocalForge filesystem read, or return less.`,
-    "",
-    "Tools:",
-    ...catalog.map((t) => `- ${t.signature} // ${clip(t.description.split("\n", 1)[0]!.trim(), DESCRIPTION_CHARS)}`),
+function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
+  const rules = [
+    "Run a JavaScript program on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and to shrink big results before they reach you.",
+    "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted at the end); run independent calls with Promise.allSettled.",
+    "Calls take the same arguments and return the same JSON as the direct LocalForge tools. A refused call (e.g. path_denied) rejects; a command that fails resolves with success: false. Use absolute paths. Processes started here belong to this server.",
+    ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit.`,
+  ]
+  if (o.fullCatalog)
+    return [
+      ...rules,
+      "",
+      "Tools:",
+      ...catalog.map((t) => `- ${t.signature} // ${clip(t.description.split("\n", 1)[0]!.trim(), DESCRIPTION_CHARS)}`),
+    ].join("\n")
+  const text = [
+    ...rules,
+    'Argument notes: return search("localforge.<tool>") from a program. Tools, called as tools.localforge.<name>:',
+    ...exposed.map(compact),
   ].join("\n")
+  // shortcut: a much bigger tool set loses its last tool lines here; list tools through search() if that happens.
+  return text.length <= QUICK_LIMIT ? text : text.slice(0, QUICK_LIMIT - 3) + "..."
 }
