@@ -76,7 +76,7 @@ export function startClient(command: string[], env: Record<string, string | unde
 /** Serves requests from stdin until it closes, then waits for the ones still running. */
 export async function serve(handle: (method: string, params: Json, signal: AbortSignal) => Promise<Json>) {
   const write = (message: Json) => process.stdout.write(encode(message))
-  const running = new Set<Promise<void>>()
+  const running = new Set<Promise<unknown>>()
   // Per request id, so notifications/cancelled can stop the request it names.
   const controllers = new Map<unknown, AbortController>()
   for await (const line of lines(Bun.stdin.stream())) {

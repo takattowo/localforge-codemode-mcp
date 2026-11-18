@@ -15,6 +15,7 @@ Quick connection, so roots, denied paths and mode still apply to every inner cal
 bun install
 Copy-Item codemode.example.json codemode.json   # then point mcpConfig at Quick's mcp_config.json
 bun test
+bun run typecheck
 ```
 
 Add a Local MCP connection in Quick:

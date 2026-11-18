@@ -6,13 +6,15 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/server.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc"
   },
   "dependencies": {
     "@opencode/codemode": "2.3.2",
     "effect": "4.1.0"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.4"
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
   }
 }
