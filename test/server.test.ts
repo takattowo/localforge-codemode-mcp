@@ -96,6 +96,7 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
       for (const name of ["filesystem", "search", "multi_search", "git", "execute", "process"])
         expect(tool.description).toContain(`\n- ${name}({`)
       expect(tool.description).not.toContain("\n- batch(")
+      expect(tool.description).toContain("interrupted calls may still finish")
       expect(tool.description.endsWith("...")).toBe(false)
       console.log(`execute description: ${tool.description.length} chars, ~${Math.round(tool.description.length / 4)} tokens`)
 

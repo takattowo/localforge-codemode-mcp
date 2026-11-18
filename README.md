@@ -41,7 +41,7 @@ Use the full `bun.exe` path: Quick's PATH may not include `.bun\bin`. Restart Qu
 | `maxToolCalls` | `50` | Per program |
 | `maxOutputBytes` | `30000` | Bigger replies are saved to `spillDir` and returned as a path and preview |
 | `spillDir` | `<repo>/.spill` | Keep it inside LocalForge's read roots so the model can read spilled files |
-| `fullCatalog` | `false` | List full signatures with every argument's notes (~7k characters). Quick cuts tool descriptions at about 2,048 characters, so keep it off there; the default is one short line per tool, under 2,000 characters, and `search()` in a program returns the notes either way |
+| `fullCatalog` | `false` | List full signatures with every argument's notes (~15.7k characters for LocalForge). Quick cuts tool descriptions at about 2,048 characters, so keep it off there; the default is one short line per tool, under 2,000 characters, and `search()` in a program returns the notes either way |
 | `historyFile` | `<repo>/.history/runs.jsonl` | One line per run: code, outcome, calls, `toolBytes` (what inner calls returned) and `replyBytes` (what the model got). `null` turns it off |
 
 `batch`, `todo` and `workspace` are never exposed: a program already runs calls in parallel or in order, and `batch`

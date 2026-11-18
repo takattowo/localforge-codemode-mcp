@@ -137,6 +137,11 @@ describe("execute", () => {
     for (const name of ["batch", "todo", "workspace", "execute", "process"]) expect(shellOff.description).not.toContain(`\n- ${name}(`)
     for (const name of ["filesystem", "search", "multi_search", "git"]) expect(shellOff.description).toContain(`\n- ${name}(`)
     expect(runner(() => ok({})).description).toContain("\n- execute(")
+    // A non-array `required` must not crash or mark arguments by substring.
+    const odd = runner(() => ok({}), {
+      tools: [{ name: "git", inputSchema: { type: "object", properties: { action: {}, act: {} }, required: "action" } as object }],
+    })
+    expect(odd.description).toContain("\n- git({action?, act?})")
     const { body } = await run(shellOff, `return await tools.localforge.batch({ calls: [] })`)
     expect(body.ok).toBe(false)
     expect(body.calls).toEqual([])

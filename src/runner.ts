@@ -71,9 +71,10 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
 }
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
-  const s = (t.inputSchema ?? {}) as { properties?: Record<string, { enum?: unknown[] }>; required?: string[] }
+  const s = (t.inputSchema ?? {}) as { properties?: Record<string, { enum?: unknown[] }>; required?: unknown }
+  const required = Array.isArray(s.required) ? s.required : []
   const args = Object.entries(s.properties ?? {}).map(
-    ([k, v]) => `${k}${s.required?.includes(k) ? "" : "?"}${Array.isArray(v?.enum) ? `: ${v.enum.join("|")}` : ""}`,
+    ([k, v]) => `${k}${required.includes(k) ? "" : "?"}${Array.isArray(v?.enum) ? `: ${v.enum.join("|")}` : ""}`,
   )
   return `- ${t.name}({${args.join(", ")}})`
 }
@@ -214,11 +215,11 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
 
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
-    "Run a JavaScript program on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and to shrink big results before they reach you.",
-    "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted at the end); run independent calls with Promise.allSettled.",
-    "Calls take the same arguments and return the same JSON as the direct LocalForge tools. A refused call (e.g. path_denied) rejects; a command that fails resolves with success: false. Use absolute paths. Processes started here belong to this server.",
+    "Run a JavaScript program on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
+    "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
+    "Calls take the same arguments and return the same JSON as the direct LocalForge tools. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. Use absolute paths. Processes started here belong to this server.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit.`,
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]; interrupted calls may still finish. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit.`,
   ]
   if (o.fullCatalog)
     return [
