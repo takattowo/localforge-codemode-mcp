@@ -70,20 +70,27 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
   return callsPart(all, kept)
 }
 // Enum values of an argument, also behind anyOf/oneOf or a local $ref (pydantic Optional[Literal], Enum).
+const LOCAL_REF = /^#\/(?:\$defs|definitions)\/([^/]+)$/
 const enumOf = (v: any, defs: Record<string, any>, depth = 0): unknown[] => {
   if (!v || typeof v !== "object" || depth > 4) return []
   if (Array.isArray(v.enum)) return v.enum
-  if (typeof v.$ref === "string") return enumOf(defs[v.$ref.split("/").pop()!], defs, depth + 1)
+  if (typeof v.$ref === "string") {
+    // Only #/$defs/X or #/definitions/X: other files or deeper pointers could match a local name by accident.
+    const name = LOCAL_REF.exec(v.$ref)?.[1]
+    return name !== undefined && Object.hasOwn(defs, name) ? enumOf(defs[name], defs, depth + 1) : []
+  }
   const members = [...(Array.isArray(v.anyOf) ? v.anyOf : []), ...(Array.isArray(v.oneOf) ? v.oneOf : [])]
   return members.flatMap((m) => enumOf(m, defs, depth + 1))
 }
+// A value as the model would type it: strings bare, anything else (null, numbers, objects) as JSON.
+const shown = (x: unknown) => (typeof x === "string" ? x : safeJson(x))
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
   const s = (t.inputSchema ?? {}) as { properties?: Record<string, unknown>; required?: unknown; $defs?: object; definitions?: object }
   const required = Array.isArray(s.required) ? s.required : []
   const defs = { ...s.definitions, ...s.$defs }
   const args = Object.entries(s.properties ?? {}).map(([k, v]) => {
-    const values = enumOf(v, defs)
+    const values = [...new Set(enumOf(v, defs).map(shown))]
     return `${k}${required.includes(k) ? "" : "?"}${values.length ? `: ${values.join("|")}` : ""}`
   })
   return `- ${t.name}({${args.join(", ")}})`

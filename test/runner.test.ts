@@ -223,6 +223,26 @@ describe("execute", () => {
       ],
     })
     expect(nested.description).toContain("\n- git({mode?: a|b, kind?: x|y, old?: 1|2, loop?})")
+
+    // Repeats show once, null and objects as JSON, and only local #/$defs/X or #/definitions/X refs are followed.
+    const odd = runner(() => ok({}), {
+      tools: [
+        {
+          name: "git",
+          inputSchema: {
+            type: "object",
+            properties: {
+              mode: { anyOf: [{ enum: ["a", "b"] }, { enum: ["b", "c"] }] },
+              val: { enum: [null, { x: 1 }, "s"] },
+              far: { $ref: "other.json#/$defs/Kind" },
+              deep: { $ref: "#/$defs/A/properties/Kind" },
+            },
+            $defs: { Kind: { enum: ["wrong"] }, A: { properties: { Kind: { enum: ["wrong"] } } } },
+          } as object,
+        },
+      ],
+    })
+    expect(odd.description).toContain('\n- git({mode?: a|b|c, val?: null|{"x":1}|s, far?, deep?})')
   })
 
   test("the default description stays under Quick's 2,000-character limit, rules first", async () => {
