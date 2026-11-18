@@ -45,7 +45,9 @@ describe("execute", () => {
     expect(isError).toBe(false)
     expect(body.ok).toBe(true)
     expect(body.value).toBe(42)
-    expect(body.calls).toEqual([{ tool: "localforge.filesystem", status: "completed", input: '{"action":"stat","path":"/r/a.txt"}' }])
+    // A completed call is only counted: the program already has its result.
+    expect(body.completed).toEqual({ "localforge.filesystem": 1 })
+    expect(body.calls).toEqual([])
   })
 
   test("chained calls feed one result into the next", async () => {
@@ -64,7 +66,8 @@ describe("execute", () => {
        return out`,
     )
     expect(body.value).toEqual([18, 18])
-    expect(body.calls.map((c: any) => c.tool)).toEqual(["localforge.search", "localforge.filesystem", "localforge.filesystem"])
+    expect(body.completed).toEqual({ "localforge.search": 1, "localforge.filesystem": 2 })
+    expect(body.calls).toEqual([])
   })
 
   test("allSettled runs calls in parallel and keeps the refused one", async () => {
@@ -85,7 +88,8 @@ describe("execute", () => {
     expect(body.value[0]).toBe("/r/a")
     expect(body.value[1]).toContain("path_denied: Denied path: secret")
     expect(body.value[2]).toBe("/r/b")
-    expect(body.calls.map((c: any) => c.status)).toEqual(["completed", "error", "completed"])
+    expect(body.completed).toEqual({ "localforge.filesystem": 2 })
+    expect(body.calls).toEqual([{ tool: "localforge.filesystem", status: "error", input: '{"action":"stat","path":"/r/secret"}' }])
   })
 
   test("a caught tool error and a failed command still show as errors in the call log", async () => {
@@ -108,6 +112,7 @@ describe("execute", () => {
       ["localforge.git", "error"],
       ["localforge.execute", "error"],
     ])
+    expect(body).not.toHaveProperty("completed")
   })
 
   test("timeout stops a runaway program", async () => {
@@ -125,7 +130,7 @@ describe("execute", () => {
     const { body } = await run(r, `for (let i = 0; i < 5; i++) await tools.localforge.git({ action: "status", cwd: "/r" }); return "done"`)
     expect(body.ok).toBe(false)
     expect(body.error.kind).toBe("ToolCallLimitExceeded")
-    expect(body.calls).toHaveLength(2)
+    expect(body.completed).toEqual({ "localforge.git": 2 })
   })
 
   test("a reply over the cap is saved to a file and returned as a path and preview", async () => {
@@ -327,7 +332,7 @@ describe("execute", () => {
       expect(d).toHaveLength(2_000)
       expect(d).toStartWith("Run JavaScript on the user's PC")
       expect(d).toEndWith("...")
-      for (const rule of ["Limits: 5 s", "or return less", "waited on or stopped here", '\nArgument notes: return search("localforge.<tool>")'])
+      for (const rule of ["Limits: 5 s", "or return less", "only reachable here", '\nArgument notes: return search("localforge.<tool>")'])
         expect(d).toContain(rule)
       expect(d).toContain("\n- filesystem({action: read|write|list|delete, ")
       expect(d).not.toContain("xxx")
@@ -354,7 +359,8 @@ describe("execute", () => {
   })
 
   test("a spilled reply stays under the cap with many calls and non-ASCII text", async () => {
-    const r = runner(() => ok({}), { maxOutputBytes: 2_000 })
+    // Failed commands, so every call keeps its row.
+    const r = runner(() => ok({ success: false }), { maxOutputBytes: 2_000 })
     const reply = await r.execute(
       `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40), path: "/r" })
        return "\u65e5\u672c".repeat(3000)`,
@@ -425,7 +431,7 @@ describe("execute", () => {
   })
 
   test("the cancelled or internal-error reply keeps to the cap too", async () => {
-    const r = runner(() => ok({}), { maxOutputBytes: 2_000 })
+    const r = runner(() => ok({ success: false }), { maxOutputBytes: 2_000 })
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 300)
     const reply = await r.execute(

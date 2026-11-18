@@ -121,6 +121,12 @@ const absolutePaths = (tool: string, value: any, cwd: string | undefined) => {
   if (tool === "multi_search" && Array.isArray(value.results)) for (const e of value.results) fix(e?.results)
   return value
 }
+// A completed call only as a count per tool: its row costs ~150-200 bytes and the program already has its result.
+const logOf = (all: Row[]) => {
+  const completed: Record<string, number> = {}
+  for (const r of all) if (r.status === "completed") completed[r.tool] = (completed[r.tool] ?? 0) + 1
+  return { counts: Object.keys(completed).length ? { completed } : {}, rows: all.filter((r) => r.status !== "completed") }
+}
 const callsPart = (all: Row[], kept: number) => ({
   calls: all.slice(0, kept),
   ...(kept < all.length ? { callsOmitted: all.length - kept } : {}),
@@ -264,8 +270,9 @@ export function createRunner(o: Options) {
         ? { kind: "Cancelled", message: "The run was cancelled." }
         : { kind: "InternalError", message: e instanceof Error ? e.message : String(e) }
       result = { ok: false, error }
-      const head = { ok: false, error: clipError(error, o.maxOutputBytes) }
-      const part = keepCalls(calls, o.maxOutputBytes, (p) => ({ ...head, ...p }))
+      const { counts, rows } = logOf(calls)
+      const head = { ok: false, error: clipError(error, o.maxOutputBytes), ...counts }
+      const part = keepCalls(rows, o.maxOutputBytes, (p) => ({ ...head, ...p }))
       reply = { text: JSON.stringify({ ...head, ...part }), isError: true, spilled: false }
     }
     if (o.historyFile) {
@@ -296,7 +303,8 @@ export function createRunner(o: Options) {
 
 function fit(reply: { ok: boolean; error?: { kind: string; message: string }; calls: Row[] }, o: Options) {
   const cap = o.maxOutputBytes
-  const text = JSON.stringify(reply)
+  const { counts, rows } = logOf(reply.calls)
+  const text = JSON.stringify({ ...reply, ...counts, calls: rows })
   const bytes = Buffer.byteLength(text)
   if (bytes <= cap) return { text, isError: !reply.ok, spilled: false }
   mkdirSync(o.spillDir, { recursive: true })
@@ -307,8 +315,8 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
   // ok, error and the path come first; then as many call rows as fit; the preview gets whatever room is left.
   // shortcut: a cap under ~1 KB, or an error message near the cap, can still go over it.
   const error = reply.error && clipError(reply.error, cap)
-  const head = { ok: reply.ok, ...(error ? { error } : {}), spilled: { path, bytes } }
-  const part = keepCalls(reply.calls, cap, (p) => ({ ...head, ...p, preview: "" }))
+  const head = { ok: reply.ok, ...(error ? { error } : {}), spilled: { path, bytes }, ...counts }
+  const part = keepCalls(rows, cap, (p) => ({ ...head, ...p, preview: "" }))
   const envelope = (preview: string) => ({ ...head, ...part, preview })
   // The longest start of the full reply whose JSON-escaped UTF-8 still fits; never more characters than bytes left.
   // A lone high surrogate escapes to 6 bytes, more than its whole pair (4), so the longest fit never splits a pair.
@@ -327,9 +335,9 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
   const rules = [
     "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
     "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
-    "Calls take the same arguments and return the same JSON as direct LocalForge. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here can only be waited on or stopped here.",
+    "Calls take the same arguments and return the same JSON as direct LocalForge. A refused call rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here are only reachable here.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]; interrupted calls may still finish. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, completed {tool: count}, calls [{tool, status, input}] for errors and interrupted ones (may still finish). Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [
