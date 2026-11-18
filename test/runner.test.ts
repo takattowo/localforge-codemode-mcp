@@ -271,8 +271,9 @@ describe("execute", () => {
       '\n- git({lit?: "null"|null|"1"|1|a, slash?: s, tilde?: t, space?: y, other?, ctor?, proto?, bad?})',
     )
 
-    // Blank strings and ones with | , { } are quoted too, or they would vanish or break the line. A %2F ref names a
-    // deeper pointer, not the key "a/b", so it gives nothing; a #/definitions/X ref is found in definitions.
+    // Blank strings, ones with | , { } or a quote, control characters, edge spaces and zero-width spaces are quoted
+    // too, or they would vanish, break the line or read as another value. A %2F ref names a deeper pointer, not the
+    // key "a/b", so it gives nothing; a #/definitions/X ref is found in definitions.
     const quoted = runner(() => ok({}), {
       tools: [
         {
@@ -282,6 +283,7 @@ describe("execute", () => {
             properties: {
               blank: { enum: ["", "  ", "ok"] },
               sep: { enum: ["a|b", "a,b", "x{y", "x}y"] },
+              ctl: { enum: ["a\nb", "t\tb", " a", "a ", '"ok', "\u200b"] },
               enc: { $ref: "#/$defs/a%2Fb" },
               defn: { $ref: "#/definitions/K" },
             },
@@ -292,7 +294,7 @@ describe("execute", () => {
       ],
     })
     expect(quoted.description).toContain(
-      '\n- git({blank?: ""|"  "|ok, sep?: "a|b"|"a,b"|"x{y"|"x}y", enc?, defn?: k})',
+      '\n- git({blank?: ""|"  "|ok, sep?: "a|b"|"a,b"|"x{y"|"x}y", ctl?: "a\\nb"|"t\\tb"|" a"|"a "|"\\"ok"|"\u200b", enc?, defn?: k})',
     )
   })
 

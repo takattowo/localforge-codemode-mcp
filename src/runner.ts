@@ -105,10 +105,11 @@ const readsAsJson = (s: string) => {
     return false
   }
 }
-// A value as the model would type it: strings bare unless they read as JSON ("null", "1"), are blank, or hold a
-// character the tool line uses (| , { }), so none can vanish, break the line, or merge with the value they spell;
-// anything else (null, numbers, objects) as JSON.
-const bare = (s: string) => s.trim() !== "" && !/[|,{}]/.test(s) && !readsAsJson(s)
+// A value as the model would type it: strings bare unless they read as JSON ("null", "1"), are blank, have edge
+// spaces, or hold a character the tool line uses (| , { } "), a control character or a zero-width space, so none
+// can vanish, break the line, or read as another value; anything else (null, numbers, objects) as JSON.
+const bare = (s: string) =>
+  s !== "" && s === s.trim() && !/[\x00-\x1f\x7f|,{}"\u200b-\u200d\ufeff]/.test(s) && !readsAsJson(s)
 const shown = (x: unknown) => (typeof x === "string" && bare(x) ? x : safeJson(x))
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
