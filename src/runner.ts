@@ -75,7 +75,9 @@ const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
 const LOCAL_REF = /^#\/(\$defs|definitions)\/([^/]+)$/
 type Defs = { $defs?: unknown; definitions?: unknown }
 // A JSON-pointer segment from a URI fragment: %-escapes first, then ~1 (/) and ~0 (~), as RFC 6901 says.
+// An escaped slash (%2F) splits the pointer into more segments, so it can't name a single key here.
 const segment = (raw: string) => {
+  if (/%2f/i.test(raw)) return undefined
   try {
     return decodeURIComponent(raw).replaceAll("~1", "/").replaceAll("~0", "~")
   } catch {
@@ -103,9 +105,11 @@ const readsAsJson = (s: string) => {
     return false
   }
 }
-// A value as the model would type it: strings bare unless they read as JSON ("null", "1"), so they can't be
-// mistaken for or merged with the value they spell; anything else (null, numbers, objects) as JSON.
-const shown = (x: unknown) => (typeof x === "string" && !readsAsJson(x) ? x : safeJson(x))
+// A value as the model would type it: strings bare unless they read as JSON ("null", "1"), are blank, or hold a
+// character the tool line uses (| , { }), so none can vanish, break the line, or merge with the value they spell;
+// anything else (null, numbers, objects) as JSON.
+const bare = (s: string) => s.trim() !== "" && !/[|,{}]/.test(s) && !readsAsJson(s)
+const shown = (x: unknown) => (typeof x === "string" && bare(x) ? x : safeJson(x))
 // One short line per tool: argument names (? when optional) and enum values, no notes.
 const compact = (t: McpTool) => {
   const s = (t.inputSchema ?? {}) as { properties?: Record<string, unknown>; required?: unknown } & Defs

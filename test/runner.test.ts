@@ -270,6 +270,30 @@ describe("execute", () => {
     expect(refs.description).toContain(
       '\n- git({lit?: "null"|null|"1"|1|a, slash?: s, tilde?: t, space?: y, other?, ctor?, proto?, bad?})',
     )
+
+    // Blank strings and ones with | , { } are quoted too, or they would vanish or break the line. A %2F ref names a
+    // deeper pointer, not the key "a/b", so it gives nothing; a #/definitions/X ref is found in definitions.
+    const quoted = runner(() => ok({}), {
+      tools: [
+        {
+          name: "git",
+          inputSchema: {
+            type: "object",
+            properties: {
+              blank: { enum: ["", "  ", "ok"] },
+              sep: { enum: ["a|b", "a,b", "x{y", "x}y"] },
+              enc: { $ref: "#/$defs/a%2Fb" },
+              defn: { $ref: "#/definitions/K" },
+            },
+            $defs: { "a/b": { enum: ["wrong"] } },
+            definitions: { K: { enum: ["k"] } },
+          } as object,
+        },
+      ],
+    })
+    expect(quoted.description).toContain(
+      '\n- git({blank?: ""|"  "|ok, sep?: "a|b"|"a,b"|"x{y"|"x}y", enc?, defn?: k})',
+    )
   })
 
   test("the default description stays under Quick's 2,000-character limit, rules first", async () => {
