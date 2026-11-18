@@ -1,7 +1,8 @@
-# codemode-mcp
+# localforge-codemode
 
-Prototype MCP server with one tool, `execute`. The model sends a JavaScript program; the program calls LocalForge
-as `await tools.localforge.<tool>({...})`, and only its return value goes back. Programs run in
+Code mode for [LocalForge](https://github.com/takattowo/localforge-mcp): an MCP server with one tool, `execute`. The
+model sends a JavaScript program; the program calls LocalForge as `await tools.localforge.<tool>({...})`, and only its
+return value goes back. Programs run in
 [`@opencode/codemode`](https://www.npmjs.com/package/@opencode/codemode) (MIT), a confined JS-subset interpreter, so
 they reach the outside only through those tools.
 
@@ -19,7 +20,7 @@ bun test
 Add a Local MCP connection in Quick:
 
 ```json
-"codemode-mcp": {
+"localforge-codemode": {
   "command": "C:\\Users\\<you>\\.bun\\bin\\bun.exe",
   "args": ["run", "<repo>\\src\\server.ts"]
 }

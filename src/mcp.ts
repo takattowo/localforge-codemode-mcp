@@ -52,7 +52,7 @@ export function startClient(command: string[], env: Record<string, string | unde
         else waiter.resolve(message.result)
       }
     } catch (e) {
-      console.error(`codemode-mcp: lost the LocalForge output stream: ${e}`)
+      console.error(`localforge-codemode: lost the LocalForge output stream: ${e}`)
     } finally {
       // shortcut: no restart after the child exits; every later call fails until the host restarts this server.
       closed = true

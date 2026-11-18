@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "codemode-mcp",
+      "name": "localforge-codemode",
       "dependencies": {
         "@opencode/codemode": "2.3.2",
         "effect": "4.1.0",
