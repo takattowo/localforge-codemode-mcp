@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startClient, lines } from "../src/mcp"
 
-const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
+const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-mcp-test-"))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 // A fake MCP server: waits for 4 requests, then sends junk and a request of its own, answers 3, 2, 1 in that order

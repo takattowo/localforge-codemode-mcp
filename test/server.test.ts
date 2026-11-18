@@ -9,7 +9,7 @@ const configPath = resolve(process.env.LOCALFORGE_CODEMODE_CONFIG ?? join(root, 
 
 // Starts the server with a config file holding `content` and returns how it ended.
 const startWith = async (content: string) => {
-  const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-test-"))
+  const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-mcp-test-"))
   try {
     const path = join(dir, "codemode.json")
     writeFileSync(path, content)

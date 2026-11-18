@@ -177,7 +177,7 @@ export function createRunner(o: Options) {
         appendFileSync(o.historyFile, JSON.stringify(run) + "\n")
       } catch (e) {
         // The program's reply matters more than its history line.
-        console.error(`localforge-codemode: could not write history: ${e}`)
+        console.error(`localforge-codemode-mcp: could not write history: ${e}`)
       }
     }
     return { text: reply.text, isError: reply.isError }

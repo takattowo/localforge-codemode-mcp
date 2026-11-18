@@ -1,4 +1,4 @@
-# localforge-codemode
+# localforge-codemode-mcp
 
 Code mode for [LocalForge](https://github.com/takattowo/localforge-mcp): an MCP server with one tool, `execute`. The
 model sends a JavaScript program; the program calls LocalForge as `await tools.localforge.<tool>({...})`, and only its
@@ -21,7 +21,7 @@ bun run typecheck
 Add a Local MCP connection in Quick:
 
 ```json
-"localforge-codemode": {
+"localforge-codemode-mcp": {
   "command": "C:\\Users\\<you>\\.bun\\bin\\bun.exe",
   "args": ["run", "<repo>\\src\\server.ts"]
 }

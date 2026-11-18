@@ -25,7 +25,7 @@ const localforge = startClient([entry.command, ...(entry.args ?? [])], { ...proc
 await localforge.request("initialize", {
   protocolVersion: "2025-06-18",
   capabilities: {},
-  clientInfo: { name: "localforge-codemode", version: VERSION },
+  clientInfo: { name: "localforge-codemode-mcp", version: VERSION },
 })
 localforge.notify("notifications/initialized")
 const { tools } = await localforge.request("tools/list")
@@ -76,7 +76,7 @@ await serve(async (method, params, signal) => {
       return {
         protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0],
         capabilities: { tools: {} },
-        serverInfo: { name: "localforge-codemode", version: VERSION },
+        serverInfo: { name: "localforge-codemode-mcp", version: VERSION },
       }
     case "ping":
       return {}
