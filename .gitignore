@@ -1,0 +1,4 @@
+node_modules/
+.spill/
+.history/
+codemode.json

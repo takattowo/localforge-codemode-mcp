@@ -1,0 +1,10 @@
+{
+  "mcpConfig": "C:\\Users\\<you>\\.quickwork\\profiles\\<profile>\\mcp_config.json",
+  "server": "localforge-mcp",
+  "allowShell": true,
+  "timeoutMs": 60000,
+  "maxTimeoutMs": 300000,
+  "maxToolCalls": 50,
+  "maxOutputBytes": 30000,
+  "fullCatalog": false
+}
