@@ -13,6 +13,7 @@ const fromConfig = (path: string) => resolve(dirname(configPath), path)
 
 // LocalForge starts with the same command and env as the host's own connection to it.
 const serverName = config.server ?? "localforge-mcp"
+if (typeof config.mcpConfig !== "string") throw new Error(`mcpConfig is required in ${configPath}`)
 const mcpConfig = fromConfig(config.mcpConfig)
 const entry = JSON.parse(readFileSync(mcpConfig, "utf8")).mcpServers?.[serverName]
 if (!entry?.command) throw new Error(`No "${serverName}" server with a command in ${mcpConfig}`)

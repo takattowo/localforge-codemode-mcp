@@ -52,6 +52,16 @@ const safeJson = (v: unknown) => {
 }
 const bytesOf = (v: unknown) => Buffer.byteLength(JSON.stringify(v))
 const failed = (v: any) => typeof v === "object" && v !== null && v.success === false
+const callsPart = (all: Row[], kept: number) => ({
+  calls: all.slice(0, kept),
+  ...(kept < all.length ? { callsOmitted: all.length - kept } : {}),
+})
+// The most call rows, from the start, for which make() still fits the cap; callsOmitted counts the rest.
+const keepCalls = (all: Row[], cap: number, make: (part: object) => object) => {
+  let kept = all.length
+  while (kept > 0 && bytesOf(make(callsPart(all, kept))) > cap) kept--
+  return callsPart(all, kept)
+}
 // A schema without its notes: only string `description` keywords go, so an argument named description stays.
 const withoutNotes = (s: any): any =>
   Array.isArray(s)
@@ -141,7 +151,9 @@ export function createRunner(o: Options) {
         ? { kind: "Cancelled", message: "The run was cancelled." }
         : { kind: "InternalError", message: e instanceof Error ? e.message : String(e) }
       result = { ok: false, error }
-      reply = { text: JSON.stringify({ ok: false, error, calls }), isError: true, spilled: false }
+      const head = { ok: false, error: { kind: error.kind, message: clip(error.message, Math.floor(o.maxOutputBytes / 8)) } }
+      const part = keepCalls(calls, o.maxOutputBytes, (p) => ({ ...head, ...p }))
+      reply = { text: JSON.stringify({ ...head, ...part }), isError: true, spilled: false }
     }
     if (o.historyFile) {
       const run = {
@@ -183,15 +195,10 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
   // shortcut: a cap under ~1 KB, or an error message near the cap, can still go over it.
   const error = reply.error && { kind: reply.error.kind, message: clip(reply.error.message, Math.floor(cap / 8)) }
   const head = { ok: reply.ok, ...(error ? { error } : {}), spilled: { path, bytes } }
-  let calls = reply.calls
-  const envelope = (preview: string) => ({
-    ...head,
-    calls,
-    ...(calls.length < reply.calls.length ? { callsOmitted: reply.calls.length - calls.length } : {}),
-    preview,
-  })
-  while (calls.length > 0 && bytesOf(envelope("")) > cap) calls = calls.slice(0, -1)
+  const part = keepCalls(reply.calls, cap, (p) => ({ ...head, ...p, preview: "" }))
+  const envelope = (preview: string) => ({ ...head, ...part, preview })
   // The longest start of the full reply whose JSON-escaped UTF-8 still fits; never more characters than bytes left.
+  // A lone high surrogate escapes to 6 bytes, more than its whole pair (4), so the longest fit never splits a pair.
   const room = cap - bytesOf(envelope(""))
   let low = 0
   let high = Math.max(0, Math.min(text.length, room))

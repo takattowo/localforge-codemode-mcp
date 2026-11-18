@@ -60,6 +60,6 @@ shell commands, with or without this server.
 - If LocalForge exits, every later call fails until Quick restarts this server.
 - Spilled files and the history file are never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
-- Cancelling a call in Quick stops the program (`Cancelled`), but a LocalForge command already running keeps going.
+- Cancelling a call in Quick stops the program and sends no reply, but a LocalForge command already running keeps going.
 - With `maxOutputBytes` under about 1 KB, a spilled reply can still go over the cap.
 - Relative paths in `codemode.json` are resolved from the folder that holds it.

@@ -87,18 +87,24 @@ export async function serve(handle: (method: string, params: Json, signal: Abort
       write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })
       continue
     }
-    if (message?.id === undefined) {
+    if (typeof message !== "object" || message === null || Array.isArray(message)) {
+      write({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })
+      continue
+    }
+    if (message.id === undefined) {
       // Notifications need no reply.
-      if (message?.method === "notifications/cancelled") controllers.get(message.params?.requestId)?.abort()
+      if (message.method === "notifications/cancelled") controllers.get(message.params?.requestId)?.abort()
       continue
     }
     const id = message.id
     const controller = new AbortController()
     controllers.set(id, controller)
+    // A cancelled request gets no reply (MCP: the receiver should not answer it).
+    const reply = (message: Json) => controller.signal.aborted || write(message)
     const done = handle(message.method, message.params, controller.signal).then(
-      (result) => write({ jsonrpc: "2.0", id, result }),
+      (result) => reply({ jsonrpc: "2.0", id, result }),
       (e) =>
-        write({
+        reply({
           jsonrpc: "2.0",
           id,
           // JSON-RPC codes are integers; a Node error's code is a string such as EACCES.

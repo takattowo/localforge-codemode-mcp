@@ -286,4 +286,42 @@ describe("execute", () => {
     const [line] = readFileSync(historyFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
     expect(line).toMatchObject({ ok: false, error: "Cancelled" })
   })
+
+  test("the cancelled or internal-error reply keeps to the cap too", async () => {
+    const r = runner(() => ok({}), { maxOutputBytes: 2_000 })
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 300)
+    const reply = await r.execute(
+      `for (let i = 0; i < 20; i++) await tools.localforge.search({ query: "\u65e5\u672c\u8a9e".repeat(40) })
+       while (true) {}`,
+      { signal: controller.signal },
+    )
+    expect(Buffer.byteLength(reply.text)).toBeLessThanOrEqual(2_000)
+    const body = JSON.parse(reply.text)
+    expect(body.error.kind).toBe("Cancelled")
+    expect(body.calls.length + (body.callsOmitted ?? 0)).toBe(20)
+  })
+
+  test("a call in flight when the run is cancelled is logged as interrupted", async () => {
+    const r = runner(async () => {
+      await Bun.sleep(2_000)
+      return ok({})
+    })
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+    const reply = await r.execute(`await tools.localforge.git({ action: "status" }); return 1`, { signal: controller.signal })
+    const body = JSON.parse(reply.text)
+    expect(body.error.kind).toBe("Cancelled")
+    expect(body.calls.map((c: any) => c.status)).toEqual(["interrupted"])
+  })
+
+  test("a spill preview never ends in half a surrogate pair", async () => {
+    for (const prefix of ["", "x", "xx", "xxx"])
+      for (const cap of [1_000, 1_001, 1_002, 1_003]) {
+        const r = runner(() => ok({}), { maxOutputBytes: cap })
+        const body = JSON.parse((await r.execute(`return ${JSON.stringify(prefix)} + "\ud83d\ude00".repeat(2000)`)).text)
+        expect(body.spilled).toBeDefined()
+        expect(/[\ud800-\udbff]$/.test(body.preview)).toBe(false)
+      }
+  })
 })
