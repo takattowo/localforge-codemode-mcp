@@ -35,6 +35,7 @@ const workingFolder = await localforge
   .request("tools/call", { name: "workspace", arguments: { action: "get" } })
   .then((r) => JSON.parse(r.content?.[0]?.text ?? "{}").cwd as string | undefined)
   .catch(() => undefined)
+if (!workingFolder) console.error("localforge-codemode-mcp: could not read LocalForge's working folder; relative search hits stay relative")
 
 const timeoutMs = config.timeoutMs ?? 60_000
 const maxTimeoutMs = config.maxTimeoutMs ?? 300_000

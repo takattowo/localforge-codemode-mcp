@@ -64,7 +64,11 @@ const failed = (v: any) => typeof v === "object" && v !== null && v.success === 
 
 // LocalForge has one working folder per server, shared by every chat and task (a set_cwd anywhere moves it), so a
 // relative path or a missing cwd could land in another session's repo. Inner calls must name absolute locations.
-const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/])/
+const DRIVE_OR_UNC = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/
+// One leading slash names a root only on POSIX; on Windows it follows the current drive, which moves with the shared
+// working folder. LocalForge's working folder tells which applies; without one, the host OS does.
+const isAbsolute = (p: string, cwd: string | undefined) =>
+  DRIVE_OR_UNC.test(p) || ((cwd !== undefined ? cwd.startsWith("/") : process.platform !== "win32") && p.startsWith("/"))
 const SHARED = " (LocalForge's working folder is shared with other chats, so a relative one could hit another repo)"
 // Each argument that names a location, with LocalForge's aliases, and whether the call needs one.
 const LOCATIONS: Record<string, Array<{ keys: string[]; required: (input: any) => boolean }>> = {
@@ -77,29 +81,30 @@ const LOCATIONS: Record<string, Array<{ keys: string[]; required: (input: any) =
   execute: [{ keys: ["cwd"], required: () => true }],
   process: [{ keys: ["cwd"], required: (input) => input.action === "start" }],
 }
-const locationProblem = (where: string, input: any, rules: (typeof LOCATIONS)[string]) => {
+const locationProblem = (where: string, input: any, rules: (typeof LOCATIONS)[string], cwd: string | undefined) => {
   for (const { keys, required } of rules) {
-    const given = keys.filter((k) => input[k] !== undefined)
-    if (given.length === 0 && required(input)) return `${where} needs an absolute ${keys[0]}${SHARED}`
+    // null means "not given", as LocalForge treats it.
+    const given = keys.filter((k) => input[k] != null)
+    if (given.length === 0 && required(input)) return `relative_path: ${where} needs an absolute ${keys[0]}${SHARED}`
     for (const k of given) {
       const v = input[k]
-      if (typeof v !== "string" || !ABSOLUTE.test(v))
-        return `${where} ${k} must be an absolute path, got ${clip(safeJson(v), 80)}${SHARED}`
+      if (typeof v !== "string" || !isAbsolute(v, cwd))
+        return `relative_path: ${where} ${k} must be an absolute path, got ${clip(safeJson(v), 80)}${SHARED}`
     }
   }
   return undefined
 }
-const pathProblem = (tool: string, input: any): string | undefined => {
+const pathProblem = (tool: string, input: any, cwd: string | undefined): string | undefined => {
   if (!input || typeof input !== "object") return undefined
   if (tool === "multi_search") {
     const searches = Array.isArray(input.searches) ? input.searches : []
     for (const [i, s] of searches.entries()) {
-      const problem = locationProblem(`localforge.multi_search searches[${i}]`, s ?? {}, LOCATIONS.search!)
+      const problem = locationProblem(`localforge.multi_search searches[${i}]`, s ?? {}, LOCATIONS.search!, cwd)
       if (problem) return problem
     }
     return undefined
   }
-  return LOCATIONS[tool] ? locationProblem(`localforge.${tool}`, input, LOCATIONS[tool]) : undefined
+  return LOCATIONS[tool] ? locationProblem(`localforge.${tool}`, input, LOCATIONS[tool], cwd) : undefined
 }
 // LocalForge shows result paths under its working folder relative to it; a program only sees absolute ones.
 const absolutePaths = (tool: string, value: any, cwd: string | undefined) => {
@@ -109,7 +114,8 @@ const absolutePaths = (tool: string, value: any, cwd: string | undefined) => {
   const fix = (results: unknown) => {
     if (!Array.isArray(results)) return
     for (const r of results)
-      if (r && typeof r === "object" && typeof r.path === "string" && !ABSOLUTE.test(r.path)) r.path = base + sep + r.path
+      if (r && typeof r === "object" && typeof r.path === "string" && !isAbsolute(r.path, cwd))
+        r.path = base + sep + r.path.replace(/[\\/]/g, sep)
   }
   if (tool === "search") fix(value.results)
   if (tool === "multi_search" && Array.isArray(value.results)) for (const e of value.results) fix(e?.results)
@@ -193,7 +199,7 @@ export function createRunner(o: Options) {
           execute: (input: unknown) =>
             Effect.tryPromise({
               try: async () => {
-                const problem = pathProblem(t.name, input)
+                const problem = pathProblem(t.name, input, o.cwd)
                 if (problem) throw new Error(problem)
                 const r = await o.call(t.name, input)
                 const value = parse(textOf(r))
@@ -319,9 +325,9 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
 
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
-    "Run a JavaScript program on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
+    "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
     "Plain JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
-    "Calls take the same arguments and return the same JSON as direct LocalForge tools. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here can only be waited on or stopped here.",
+    "Calls take the same arguments and return the same JSON as direct LocalForge. A refused call (e.g. path_denied) rejects; a failed command resolves with success: false. path/cwd must be absolute. Processes started here can only be waited on or stopped here.",
     ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
     `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}]; interrupted calls may still finish. Over ${o.maxOutputBytes} bytes it goes to a file: you get spilled {path, bytes}, preview and the calls that fit; or return less.`,
   ]

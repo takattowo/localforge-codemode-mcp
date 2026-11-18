@@ -67,11 +67,21 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
       const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-mcp-test-"))
       const testConfig = join(dir, "codemode.json")
       const testHistory = join(dir, "runs.jsonl")
+      // LocalForge restores its working folder from its state file. Pin it to this repo on a copy of its config, so
+      // search hits under the repo come back relative and the server's path fix is always exercised.
+      const name = real.server ?? "localforge-mcp"
+      const lf = JSON.parse(readFileSync(resolve(dirname(configPath), real.mcpConfig), "utf8")).mcpServers[name]
+      const stateFile = join(dir, "state.json")
+      writeFileSync(stateFile, JSON.stringify({ version: 1, cwd: root }))
+      const lfConfig = join(dir, "localforge.json")
+      writeFileSync(lfConfig, JSON.stringify({ ...JSON.parse(readFileSync(lf.env.LOCALFORGE_CONFIG, "utf8")), state_file: stateFile }))
+      const testMcp = join(dir, "mcp_config.json")
+      writeFileSync(testMcp, JSON.stringify({ mcpServers: { [name]: { ...lf, env: { ...lf.env, LOCALFORGE_CONFIG: lfConfig } } } }))
       writeFileSync(
         testConfig,
         JSON.stringify({
           ...real,
-          mcpConfig: resolve(dirname(configPath), real.mcpConfig),
+          mcpConfig: testMcp,
           historyFile: testHistory,
           spillDir: join(dir, "spill"),
         }),
