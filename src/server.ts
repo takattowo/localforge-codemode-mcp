@@ -20,6 +20,9 @@ if (typeof config.mcpConfig !== "string") throw new Error(`mcpConfig is required
 const mcpConfig = fromConfig(config.mcpConfig)
 const entry = JSON.parse(readFileSync(mcpConfig, "utf8")).mcpServers?.[serverName]
 if (!entry?.command) throw new Error(`No "${serverName}" server with a command in ${mcpConfig}`)
+// Unset until the first tool list below is read. A restart before then is left to that read, which reaches the new
+// LocalForge anyway.
+let runner: ReturnType<typeof createRunner> | undefined
 const localforge = connect(
   [entry.command, ...(entry.args ?? [])],
   { ...process.env, ...entry.env },
@@ -27,6 +30,7 @@ const localforge = connect(
   // A restarted LocalForge may be a newer one: programs after it get its tools. A failed list keeps the old ones.
   // shortcut: Quick isn't sent notifications/tools/list_changed; it sees the new description when it lists tools again.
   async (client) => {
+    if (!runner) return
     try {
       runner = build((await client.request("tools/list")).tools)
     } catch (e) {
@@ -57,11 +61,11 @@ const build = (tools: McpTool[]) =>
           ? fromConfig(config.historyFile)
           : join(root, ".history", "runs.jsonl"),
   })
-let runner = build((await localforge.request("tools/list")).tools)
+runner = build((await localforge.request("tools/list")).tools)
 
 const executeTool = () => ({
   name: "execute",
-  description: runner.description,
+  description: runner!.description,
   inputSchema: {
     type: "object",
     properties: {
@@ -97,7 +101,7 @@ await serve(async (method, params, signal) => {
         return { content: [{ type: "text", text }], isError: true }
       }
       const seconds = params.arguments?.timeout_seconds
-      const reply = await runner.execute(code, { signal, ...(typeof seconds === "number" ? { timeoutMs: seconds * 1000 } : {}) })
+      const reply = await runner!.execute(code, { signal, ...(typeof seconds === "number" ? { timeoutMs: seconds * 1000 } : {}) })
       return { content: [{ type: "text", text: reply.text }], ...(reply.isError ? { isError: true } : {}) }
     }
     default:
