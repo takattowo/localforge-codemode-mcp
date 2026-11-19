@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRunner, type CallResult, type McpTool } from "../src/runner"
@@ -140,6 +140,21 @@ describe("execute", () => {
     expect(body.spilled.bytes).toBeGreaterThan(5_000)
     const full = JSON.parse(readFileSync(body.spilled.path, "utf8"))
     expect(full.value).toBe("x".repeat(5000))
+  })
+
+  test("only the newest 100 spilled replies are kept, and other files stay", async () => {
+    const dir = join(spillDir, "prune")
+    mkdirSync(dir)
+    const name = (i: number) => `result-${1_000_000_000_000 + i}-0000000${i % 10}.json`
+    for (let i = 0; i < 105; i++) writeFileSync(join(dir, name(i)), "{}")
+    writeFileSync(join(dir, "notes.json"), "{}")
+    const reply = await runner(() => ok({}), { spillDir: dir, maxOutputBytes: 1_000 }).execute(`return "x".repeat(5000)`)
+    const left = readdirSync(dir)
+    expect(left.filter((n) => n.startsWith("result-"))).toHaveLength(100)
+    expect(existsSync(JSON.parse(reply.text).spilled.path)).toBe(true)
+    expect(left).not.toContain(name(5))
+    expect(left).toContain(name(6))
+    expect(left).toContain("notes.json")
   })
 
   test("a call LocalForge cut for size hands the program the full result from result_path", async () => {

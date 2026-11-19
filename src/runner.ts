@@ -1,6 +1,6 @@
 import { CodeMode, Tool, toolError } from "@opencode/codemode"
 import { Effect } from "effect"
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { dirname, isAbsolute, join } from "node:path"
 
@@ -35,6 +35,9 @@ const INPUT_CHARS = 160
 const DESCRIPTION_CHARS = 500
 // Quick cuts a tool description at about 2,048 characters, so the default description stays under this.
 const QUICK_LIMIT = 2_000
+// Spilled replies kept, like LocalForge keeps its newest 100 saved results.
+const SPILL_KEEP = 100
+const SPILLED = /^result-\d+-[0-9a-f]{8}\.json$/
 
 const textOf = (r: CallResult) => (r.content ?? []).map((c) => c.text ?? "").join("")
 const parse = (text: string): any => {
@@ -270,9 +273,9 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
   const bytes = Buffer.byteLength(text)
   if (bytes <= cap) return { text, isError: !reply.ok, spilled: false }
   mkdirSync(o.spillDir, { recursive: true })
-  // shortcut: spilled files are never cleaned up; add pruning if the folder grows.
   const path = join(o.spillDir, `result-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.json`)
   writeFileSync(path, text)
+  prune(o.spillDir)
 
   // ok, error and the path come first; then as many call rows as fit; the preview gets whatever room is left.
   // shortcut: a cap under ~1 KB, or an error message near the cap, can still go over it.
@@ -291,6 +294,17 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
     else high = mid - 1
   }
   return { text: JSON.stringify(envelope(text.slice(0, low))), isError: !reply.ok, spilled: true }
+}
+
+// Names start with Date.now(), so name order is age order. Only this server's own files go, and a file that can't be
+// removed now (open elsewhere) waits for a later run: pruning never fails a reply.
+function prune(dir: string) {
+  try {
+    for (const name of readdirSync(dir).filter((n) => SPILLED.test(n)).sort().slice(0, -SPILL_KEEP))
+      try {
+        rmSync(join(dir, name), { force: true })
+      } catch {}
+  } catch {}
 }
 
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
