@@ -295,11 +295,11 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
 
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
-    "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back. Use it to chain calls and shrink big results.",
-    "JavaScript in `code`, no code fence; no imports, require, fetch or timers. End with `return` of only what you need. Await every call (pending ones are interrupted); run independent calls with Promise.allSettled.",
-    "Calls take and return the same JSON as direct LocalForge. A refused call rejects; a failed command resolves with success: false. Name absolute paths or an absolute cwd. Processes started here are only reachable here.",
-    ...(o.allowShell ? ["Write shell commands as literal strings or argv arrays, not built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}) and ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}], interrupted may still finish; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes it goes to a file: spilled {path, bytes}, preview and the calls that fit; or return less.`,
+    "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back: chain calls, shrink big results.",
+    "`code` is plain JS: no code fence, imports, require, fetch or timers. `return` only what you need. Await every call (pending ones are interrupted); run independent ones with Promise.allSettled.",
+    "Same JSON as direct LocalForge; a refused call rejects, a failed command resolves with success: false. Use absolute paths or an absolute cwd. Processes started here are only reachable here.",
+    ...(o.allowShell ? ["Shell commands: literal strings or argv arrays, never built from tool results."] : []),
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}), ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}] (interrupted may still finish); if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes: spilled {path, bytes}, preview, the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [
@@ -310,7 +310,7 @@ function describe(catalog: ReadonlyArray<{ signature: string; description: strin
     ].join("\n")
   const text = [
     ...rules,
-    'Tools, called as tools.localforge.<name>; argument notes: return search("localforge.<tool>"):',
+    'Tools as tools.localforge.<name>; argument notes: return search("localforge.<tool>"):',
     ...exposed.map(compact),
   ].join("\n")
   if (text.length <= QUICK_LIMIT) return text

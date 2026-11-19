@@ -124,8 +124,8 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
 
         const [tool] = replies.get(2).result.tools
         expect(tool.name).toBe("execute")
-        // Quick cuts tool descriptions at about 2,048 characters.
-        expect(tool.description.length).toBeLessThanOrEqual(2_000)
+        // Quick cuts tool descriptions at about 2,048 characters; 100 spare leaves LocalForge room to grow.
+        expect(tool.description.length).toBeLessThanOrEqual(1_900)
         for (const name of ["filesystem", "search", "multi_search", "git", "execute", "process"])
           expect(tool.description).toContain(`\n- ${name}({`)
         expect(tool.description).not.toContain("\n- batch(")
