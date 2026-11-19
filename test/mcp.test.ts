@@ -123,15 +123,18 @@ test("each restarted LocalForge, not the first, goes to onRestart before calls w
   const fake = mortal("on-restart", 2)
   const seen: string[] = []
   const localforge = connect(fake.command, process.env, { name: "test", version: "0" }, async (client) => {
-    seen.push((await client.request("tools/list")).token)
+    const { token } = await client.request("tools/list")
+    // Slow on purpose: a call that didn't wait for onRestart would land first.
+    await Bun.sleep(200)
+    seen.push(`restart ${token}`)
   })
   const first = await localforge.request("tools/call", { name: "stat" })
   expect(seen).toEqual([])
   await message(localforge.request("tools/call", { name: "die" }))
   expect(await message(localforge.request("tools/call", { name: "stat" }))).toBe("LocalForge exited")
   expect(seen).toEqual([])
-  const next = await localforge.request("tools/call", { name: "stat" })
-  expect(seen).toEqual([next.token])
+  const next = await localforge.request("tools/call", { name: "stat" }).then((r) => (seen.push(`call ${r.token}`), r))
+  expect(seen).toEqual([`restart ${next.token}`, `call ${next.token}`])
   expect(next.token).not.toBe(first.token)
   localforge.close()
 }, 20_000)
