@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A LocalForge restart before the first tool list no longer logs a misleading `ReferenceError`; the startup read gets the new LocalForge's tools.
+
 ## 0.2.0
 
 - After LocalForge restarts (it exited, and the next call started it again), its tool list is read again before the calls waiting on it run, so later programs get a newer LocalForge's tools and arguments, and Quick gets the new description the next time it lists tools. A failed list keeps the old tools, with a line on stderr. It used to be read once at startup.
