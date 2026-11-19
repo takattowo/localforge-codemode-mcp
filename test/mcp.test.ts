@@ -118,6 +118,24 @@ test("a start that fails fails the calls waiting on it, and the next call starts
   localforge.close()
 }, 20_000)
 
+test("each restarted LocalForge, not the first, goes to onRestart before calls waiting on it run", async () => {
+  // Start 2 dies before answering initialize, so only start 3 counts as a restart.
+  const fake = mortal("on-restart", 2)
+  const seen: string[] = []
+  const localforge = connect(fake.command, process.env, { name: "test", version: "0" }, async (client) => {
+    seen.push((await client.request("tools/list")).token)
+  })
+  const first = await localforge.request("tools/call", { name: "stat" })
+  expect(seen).toEqual([])
+  await message(localforge.request("tools/call", { name: "die" }))
+  expect(await message(localforge.request("tools/call", { name: "stat" }))).toBe("LocalForge exited")
+  expect(seen).toEqual([])
+  const next = await localforge.request("tools/call", { name: "stat" })
+  expect(seen).toEqual([next.token])
+  expect(next.token).not.toBe(first.token)
+  localforge.close()
+}, 20_000)
+
 test("after close, calls fail and nothing starts LocalForge again", async () => {
   const fake = mortal("close")
   const localforge = connect(fake.command, process.env, { name: "test", version: "0" })

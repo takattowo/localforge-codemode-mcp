@@ -75,10 +75,19 @@ export function startClient(command: string[], env: Record<string, string | unde
   }
 }
 
-/** Starts an MCP server and initializes it; if it exits, the next request starts and initializes a fresh one. */
-export function connect(command: string[], env: Record<string, string | undefined>, clientInfo: { name: string; version: string }) {
+/**
+ * Starts an MCP server and initializes it; if it exits, the next request starts and initializes a fresh one.
+ * onRestart gets each fresh one after the first, before the requests waiting on it run.
+ */
+export function connect(
+  command: string[],
+  env: Record<string, string | undefined>,
+  clientInfo: { name: string; version: string },
+  onRestart?: (client: ReturnType<typeof startClient>) => Promise<void>,
+) {
   type Client = ReturnType<typeof startClient>
   let stopped = false
+  let started = false
   // null: no start in progress or running; the next request starts one.
   let current: Promise<Client> | null = null
   const start = () => {
@@ -86,6 +95,8 @@ export function connect(command: string[], env: Record<string, string | undefine
       const client = startClient(command, env)
       await client.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo })
       client.notify("notifications/initialized")
+      if (started) await onRestart?.(client)
+      started = true
       return client
     })()
     current = starting

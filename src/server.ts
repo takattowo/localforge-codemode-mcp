@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { connect, serve } from "./mcp"
-import { createRunner } from "./runner"
+import { createRunner, type McpTool } from "./runner"
 
 const VERSION = "0.1.0"
 // shortcut: 2025-03-26 allowed JSON-RPC batches, which serve() answers with one -32600; add batch support if a client sends them.
@@ -20,36 +20,46 @@ if (typeof config.mcpConfig !== "string") throw new Error(`mcpConfig is required
 const mcpConfig = fromConfig(config.mcpConfig)
 const entry = JSON.parse(readFileSync(mcpConfig, "utf8")).mcpServers?.[serverName]
 if (!entry?.command) throw new Error(`No "${serverName}" server with a command in ${mcpConfig}`)
-const localforge = connect([entry.command, ...(entry.args ?? [])], { ...process.env, ...entry.env }, {
-  name: "localforge-codemode-mcp",
-  version: VERSION,
-})
-// shortcut: the tool list is read once; a LocalForge restarted with new tools keeps the old list until Quick restarts this server.
-const { tools } = await localforge.request("tools/list")
+const localforge = connect(
+  [entry.command, ...(entry.args ?? [])],
+  { ...process.env, ...entry.env },
+  { name: "localforge-codemode-mcp", version: VERSION },
+  // A restarted LocalForge may be a newer one: programs after it get its tools. A failed list keeps the old ones.
+  // shortcut: Quick isn't sent notifications/tools/list_changed; it sees the new description when it lists tools again.
+  async (client) => {
+    try {
+      runner = build((await client.request("tools/list")).tools)
+    } catch (e) {
+      console.error(`localforge-codemode-mcp: could not read the restarted LocalForge's tools: ${e}`)
+    }
+  },
+)
 
 const timeoutMs = config.timeoutMs ?? 60_000
 const maxTimeoutMs = config.maxTimeoutMs ?? 300_000
-const runner = createRunner({
-  tools,
-  call: (name, args) => localforge.request("tools/call", { name, arguments: args }),
-  allowShell: config.allowShell ?? true,
-  timeoutMs,
-  maxTimeoutMs,
-  maxToolCalls: config.maxToolCalls ?? 50,
-  maxOutputBytes: config.maxOutputBytes ?? 30_000,
-  // Inside the repo by default, so LocalForge's read roots can reach spilled results.
-  spillDir: config.spillDir ? fromConfig(config.spillDir) : join(root, ".spill"),
-  fullCatalog: config.fullCatalog ?? false,
-  // null turns the history off.
-  historyFile:
-    config.historyFile === null
-      ? undefined
-      : config.historyFile
-        ? fromConfig(config.historyFile)
-        : join(root, ".history", "runs.jsonl"),
-})
+const build = (tools: McpTool[]) =>
+  createRunner({
+    tools,
+    call: (name, args) => localforge.request("tools/call", { name, arguments: args }),
+    allowShell: config.allowShell ?? true,
+    timeoutMs,
+    maxTimeoutMs,
+    maxToolCalls: config.maxToolCalls ?? 50,
+    maxOutputBytes: config.maxOutputBytes ?? 30_000,
+    // Inside the repo by default, so LocalForge's read roots can reach spilled results.
+    spillDir: config.spillDir ? fromConfig(config.spillDir) : join(root, ".spill"),
+    fullCatalog: config.fullCatalog ?? false,
+    // null turns the history off.
+    historyFile:
+      config.historyFile === null
+        ? undefined
+        : config.historyFile
+          ? fromConfig(config.historyFile)
+          : join(root, ".history", "runs.jsonl"),
+  })
+let runner = build((await localforge.request("tools/list")).tools)
 
-const executeTool = {
+const executeTool = () => ({
   name: "execute",
   description: runner.description,
   inputSchema: {
@@ -63,7 +73,7 @@ const executeTool = {
     },
     required: ["code"],
   },
-}
+})
 
 const rpcError = (code: number, message: string) => Object.assign(new Error(message), { code })
 
@@ -78,7 +88,7 @@ await serve(async (method, params, signal) => {
     case "ping":
       return {}
     case "tools/list":
-      return { tools: [executeTool] }
+      return { tools: [executeTool()] }
     case "tools/call": {
       if (params?.name !== "execute") throw rpcError(-32602, `Unknown tool: ${params?.name}`)
       const code = params.arguments?.code

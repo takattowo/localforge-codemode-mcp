@@ -40,6 +40,79 @@ test("a config that is not a JSON object fails with a clear message", async () =
   }
 }, 30_000)
 
+// A fake LocalForge whose second start has one more tool. A filesystem call with action "die" makes it exit.
+const GROWING = `
+import { appendFileSync, readFileSync } from "node:fs"
+const log = process.argv[2]
+appendFileSync(log, "start\\n")
+const starts = readFileSync(log, "utf8").trim().split("\\n").length
+const tool = (name) => ({ name, inputSchema: { type: "object", properties: { action: { type: "string" } } } })
+const decoder = new TextDecoder()
+let buffer = ""
+const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n")
+for await (const chunk of Bun.stdin.stream()) {
+  buffer += decoder.decode(chunk, { stream: true })
+  let end
+  while ((end = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, end).trim()
+    buffer = buffer.slice(end + 1)
+    if (!line) continue
+    const m = JSON.parse(line)
+    if (m.method === "initialize") send(m.id, { protocolVersion: "2025-06-18" })
+    else if (m.method === "tools/list") send(m.id, { tools: starts > 1 ? [tool("filesystem"), tool("search")] : [tool("filesystem")] })
+    else if (m.method === "tools/call") {
+      if (m.params.arguments?.action === "die") process.exit(1)
+      send(m.id, { content: [{ type: "text", text: JSON.stringify({ tool: m.params.name, start: starts }) }] })
+    }
+  }
+}
+`
+
+test("a restarted LocalForge's new tools reach programs and the tool list", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "localforge-codemode-mcp-test-"))
+  try {
+    const script = join(dir, "growing.ts")
+    writeFileSync(script, GROWING)
+    const mcpConfig = join(dir, "mcp_config.json")
+    const entry = { command: process.execPath, args: [script, join(dir, "starts.log")] }
+    writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { "localforge-mcp": entry } }))
+    const config = join(dir, "codemode.json")
+    writeFileSync(config, JSON.stringify({ mcpConfig, historyFile: null, spillDir: join(dir, "spill") }))
+    const server = Bun.spawn([process.execPath, join(root, "src", "server.ts")], {
+      env: { ...process.env, LOCALFORGE_CODEMODE_CONFIG: config },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "inherit",
+    })
+    const replies = lines(server.stdout)[Symbol.asyncIterator]()
+    let id = 0
+    const ask = async (method: string, params?: object) => {
+      const sent = ++id
+      server.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: sent, method, params }) + "\n")
+      for (;;) {
+        const { value, done } = await replies.next()
+        if (done) throw new Error("server exited")
+        const m = JSON.parse(value)
+        if (m.id === sent) return m.result
+      }
+    }
+    const run = async (code: string) => JSON.parse((await ask("tools/call", { name: "execute", arguments: { code } })).content[0].text)
+    const description = async () => (await ask("tools/list")).tools[0].description
+
+    await ask("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } })
+    expect(await description()).not.toContain("\n- search(")
+    await run(`try { await tools.localforge.filesystem({ action: "die" }) } catch (e) {} return 0`)
+    // This call starts LocalForge again; the tool list is read before it runs.
+    expect((await run(`return await tools.localforge.filesystem({})`)).value).toEqual({ tool: "filesystem", start: 2 })
+    expect(await description()).toContain("\n- search({action?})")
+    expect((await run(`return await tools.localforge.search({})`)).value).toEqual({ tool: "search", start: 2 })
+    server.stdin.end()
+    expect(await server.exited).toBe(0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 30_000)
+
 // Needs a real LocalForge, so it runs only where codemode.json (gitignored) points at one with a denied path.
 const denied = (() => {
   try {

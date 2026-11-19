@@ -60,7 +60,7 @@ shell commands, with or without this server.
 - A LocalForge result over its `max_result_bytes` reaches the program whole, read from the copy LocalForge saved at
   `result_path`, not as LocalForge's cut reply; if that copy can't be read, the call fails instead.
 - On timeout, an inner LocalForge call keeps running in LocalForge; only the program stops waiting for it.
-- If LocalForge exits, the calls in flight fail and the next call starts it again; if that start fails, the calls waiting on it fail too and the one after tries again. Its tool list is read once at startup.
+- If LocalForge exits, the calls in flight fail and the next call starts it again; if that start fails, the calls waiting on it fail too and the one after tries again. A restarted LocalForge's tool list is read before those calls run, so later programs get its new tools; Quick sees the new description the next time it lists tools.
 - Only the newest 100 spilled replies (`result-*.json` in `spillDir`) are kept; the history file is never cleaned up.
 - A call still running when a program ends shows as `interrupted`; LocalForge may still finish it.
 - When a program succeeds, the reply lists only the calls that failed (including commands with `success: false`) or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`, keyed like `tool` (`localforge.git`). A failed, timed-out or cancelled run keeps every call's row, since it has no value to show what already happened. The history file keeps the program's code.
