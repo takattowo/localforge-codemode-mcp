@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path"
 import { connect, serve } from "./mcp"
 import { createRunner, createStore, type McpTool } from "./runner"
 
-const VERSION = "0.2.0"
+const VERSION = "0.3.0"
 // shortcut: 2025-03-26 allowed JSON-RPC batches, which serve() answers with one -32600; add batch support if a client sends them.
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"]
 const root = join(import.meta.dir, "..")

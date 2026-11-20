@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - `keep({ name: value })` saves plain JSON data that later programs in the same session get as constants (a `Set` as an array, a `Map` as an object); `forget(name)` drops one, `forget()` all. `execute` takes an optional `session` (default `default`) so parallel tasks don't share values. Memory only, at most 50 MB across sessions, least recently kept first out. The reply lists the session's names under `kept`. `keep` takes only a plain object: a `Map`, `Set` or array is refused instead of keeping nothing.
 - New defaults: 1000 tool calls (was 50) and 120 s (was 60) per program; `timeout_seconds` goes up to 280 s (was 300), since Quick ends a tool call at 300 s.
