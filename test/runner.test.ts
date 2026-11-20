@@ -2,7 +2,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createRunner, type CallResult, type McpTool } from "../src/runner"
+import { createRunner, createStore, type CallResult, type McpTool } from "../src/runner"
 
 // Stands in for LocalForge's tools/list: names and loose input schemas are all the runner uses.
 const TOOLS: McpTool[] = ["filesystem", "search", "multi_search", "git", "execute", "process", "batch", "todo", "workspace"].map(
@@ -31,8 +31,8 @@ const runner = (call: (name: string, args: any) => CallResult | Promise<CallResu
     ...limits,
   })
 
-const run = async (r: ReturnType<typeof createRunner>, code: string) => {
-  const reply = await r.execute(code)
+const run = async (r: ReturnType<typeof createRunner>, code: string, session?: string) => {
+  const reply = await r.execute(code, { session })
   return { ...reply, body: JSON.parse(reply.text) }
 }
 
@@ -537,5 +537,78 @@ describe("execute", () => {
     expect(seen).toEqual([{ query: "q", path: "src" }, { action: "read", path: "a" }])
     expect(body.value.hits).toEqual(["src\\a.ts"])
     expect(body.value.refusal).toBe("relative_path: filesystem read needs an absolute path, or an absolute cwd (got 'a')")
+  })
+})
+
+describe("keep", () => {
+  test("kept values are variables in later programs, as copies, even when the program then fails", async () => {
+    const r = runner(() => ok({}))
+    const first = await run(r, `const files = ["a", "b"]; keep({ files, n: 2 }); files.push("c"); throw new Error("boom")`)
+    expect(first.body.ok).toBe(false)
+    expect(first.body.kept).toEqual(["files", "n"])
+    const { body } = await run(r, `return { files, n }`)
+    expect(body.value).toEqual({ files: ["a", "b"], n: 2 })
+    expect(body.kept).toEqual(["files", "n"])
+    // A program may still declare its own variable with a kept name.
+    expect((await run(r, `const n = 5; return n`)).body.value).toBe(5)
+  })
+
+  test("each session has its own values; no session is the default one", async () => {
+    const r = runner(() => ok({}))
+    await run(r, `keep({ x: "a" })`, "task-a")
+    await run(r, `keep({ x: "default" })`)
+    expect((await run(r, `return x`, "task-a")).body.value).toBe("a")
+    expect((await run(r, `return x`)).body.value).toBe("default")
+    const other = await run(r, `return typeof x`, "task-b")
+    expect(other.body.value).toBe("undefined")
+    // An empty session adds no kept field.
+    expect(other.body).not.toHaveProperty("kept")
+  })
+
+  test("forget(name) drops one value, forget() all of the session", async () => {
+    const r = runner(() => ok({}))
+    await run(r, `keep({ a: 1, b: 2, c: 3 })`)
+    // Values are bound when a program starts, so forget() shows from the next one.
+    await run(r, `forget("a")`)
+    expect((await run(r, `return [typeof a, b]`)).body.value).toEqual(["undefined", 2])
+    expect((await run(r, `return 0`)).body.kept).toEqual(["b", "c"])
+    const cleared = await run(r, `forget(); return b`)
+    expect(cleared.body.value).toBe(2)
+    expect(cleared.body).not.toHaveProperty("kept")
+    expect((await run(r, `return typeof b`)).body.value).toBe("undefined")
+  })
+
+  test("a name that can't be a variable is refused, and nothing in that call is kept", async () => {
+    const r = runner(() => ok({}))
+    for (const name of ["1x", "a-b", "if", "tools", "search", "keep", "forget", "JSON", "undefined"]) {
+      const { body } = await run(r, `try { keep({ fine: 1, ${JSON.stringify(name)}: 2 }) } catch (e) { return e.message }`)
+      expect(body.value).toContain(`"${name}"`)
+      expect(body).not.toHaveProperty("kept")
+    }
+    expect((await run(r, `try { keep([1]) } catch (e) { return e.message }`)).body.value).toContain("keep({ name: value })")
+  })
+
+  test("over the cap the oldest values go first, across sessions; one call over the cap is refused", async () => {
+    // Each value below is 12 bytes of JSON ("xxxxxxxxxx" with its quotes).
+    const r = runner(() => ok({}), { store: createStore(30) })
+    const ten = `"x".repeat(10)`
+    await run(r, `keep({ a: ${ten} })`, "one")
+    await run(r, `keep({ b: ${ten} })`, "two")
+    // Setting a again makes it the newest.
+    await run(r, `keep({ a: ${ten} })`, "one")
+    const third = await run(r, `keep({ c: ${ten} }); return 0`, "one")
+    expect(third.body.kept).toEqual(["a", "c"])
+    expect((await run(r, `return typeof b`, "two")).body.value).toBe("undefined")
+    const big = await run(r, `try { keep({ d: "x".repeat(40) }) } catch (e) { return e.message }`, "one")
+    expect(big.body.value).toContain("30-byte cap")
+    expect(big.body.kept).toEqual(["a", "c"])
+  })
+
+  test("the description names keep, forget and session", () => {
+    const d = runner(() => ok({})).description
+    expect(d).toContain("keep({name: value})")
+    expect(d).toContain("forget(name?)")
+    expect(d).toContain("unique session")
+    expect(d).not.toContain("never built from tool results")
   })
 })

@@ -1,4 +1,4 @@
-import { CodeMode, Tool, toolError } from "@opencode/codemode"
+import { CodeMode, Extension, Tool, toolError } from "@opencode/codemode"
 import { Effect } from "effect"
 import { appendFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
@@ -21,6 +21,8 @@ export type Options = {
   fullCatalog?: boolean
   /** One JSON line per run (code, outcome, bytes in and out), for measuring; unset writes none. */
   historyFile?: string
+  /** Where keep() saves values, per session; one per runner when unset. */
+  store?: Store
 }
 type Row = { tool: string; status: "running" | "completed" | "error" | "interrupted"; input: string }
 
@@ -38,6 +40,10 @@ const QUICK_LIMIT = 2_000
 // Spilled replies kept, like LocalForge keeps its newest 100 saved results.
 const SPILL_KEEP = 100
 const SPILLED = /^result-\d+-[0-9a-f]{8}\.json$/
+// What keep() may hold, as JSON bytes, across every session.
+const KEEP_BYTES = 50_000_000
+// Names a kept value can't take: the program's own globals.
+const TAKEN = new Set(["tools", "search", "keep", "forget"])
 
 const textOf = (r: CallResult) => (r.content ?? []).map((c) => c.text ?? "").join("")
 const parse = (text: string): any => {
@@ -156,7 +162,60 @@ const compact = (t: McpTool) => {
   return `- ${t.name}({${args.join(", ")}})`
 }
 
+export type Store = ReturnType<typeof createStore>
+// Values kept by keep(), per session, as JSON: copies, sized by their bytes. Memory only. Over maxBytes the least
+// recently set values go first, whatever their session.
+export function createStore(maxBytes = KEEP_BYTES) {
+  const sessions = new Map<string, Map<string, { json: string; at: number }>>()
+  let total = 0
+  let clock = 0
+  const drop = (session: string, name: string) => {
+    const kept = sessions.get(session)
+    const value = kept?.get(name)
+    if (!kept || !value) return
+    total -= Buffer.byteLength(value.json)
+    kept.delete(name)
+    if (!kept.size) sessions.delete(session)
+  }
+  return {
+    maxBytes,
+    names: (session: string) => [...(sessions.get(session)?.keys() ?? [])],
+    values: (session: string) =>
+      Object.fromEntries([...(sessions.get(session) ?? [])].map(([name, v]) => [name, JSON.parse(v.json)])),
+    keep(session: string, entries: Record<string, string>) {
+      for (const [name, json] of Object.entries(entries)) {
+        drop(session, name)
+        if (!sessions.has(session)) sessions.set(session, new Map())
+        sessions.get(session)!.set(name, { json, at: ++clock })
+        total += Buffer.byteLength(json)
+      }
+      while (total > maxBytes) {
+        let oldest: { session: string; name: string; at: number } | undefined
+        for (const [session, kept] of sessions)
+          for (const [name, { at }] of kept) if (!oldest || at < oldest.at) oldest = { session, name, at }
+        drop(oldest!.session, oldest!.name)
+      }
+    },
+    forget(session: string, name?: string) {
+      for (const n of name === undefined ? this.names(session) : [name]) drop(session, n)
+    },
+  }
+}
+
+// A kept value becomes a variable, so its name must be one that isn't already taken.
+const keepable = (name: string) => {
+  if (!/^[A-Za-z_$][\w$]*$/.test(name) || TAKEN.has(name) || name in globalThis) return false
+  try {
+    // Reserved words (if, let, yield, ...) pass the pattern; strict-mode parsing refuses them.
+    new Function(`"use strict"; let ${name}`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function createRunner(o: Options) {
+  const store = o.store ?? createStore()
   const exposed = o.tools.filter((t) => !HIDDEN.has(t.name) && (o.allowShell || !SHELL.has(t.name)))
   // Programs run against the full schemas, so search() inside a program shows every argument's notes.
   const tree = {
@@ -188,7 +247,8 @@ export function createRunner(o: Options) {
   }
   const description = describe(CodeMode.make({ tools: tree }).catalog, exposed, o)
 
-  async function execute(code: string, options: { timeoutMs?: number; signal?: AbortSignal } = {}) {
+  async function execute(code: string, options: { timeoutMs?: number; signal?: AbortSignal; session?: string } = {}) {
+    const session = options.session ?? "default"
     const asked = options.timeoutMs
     const timeoutMs = Math.min(asked !== undefined && asked > 0 ? asked : o.timeoutMs, o.maxTimeoutMs)
     const started = Date.now()
@@ -196,9 +256,32 @@ export function createRunner(o: Options) {
     const rows = new WeakMap<object, Row>()
     // What inner calls handed the program, as JSON: compared with replyBytes it is what stayed out of context.
     let toolBytes = 0
+    // keep() saves at once, so a value outlives a program that fails after keeping it.
+    const state = Extension.make({
+      name: "state",
+      globals: {
+        keep: (values: unknown) => {
+          if (typeof values !== "object" || values === null || Array.isArray(values))
+            throw new TypeError("keep takes an object: keep({ name: value })")
+          const entries: Record<string, string> = {}
+          for (const [name, value] of Object.entries(values)) {
+            if (!keepable(name))
+              throw new TypeError(`keep: "${name}" can't be a variable (not an identifier, or taken by a global)`)
+            const json = JSON.stringify(value)
+            if (json === undefined) throw new TypeError(`keep: "${name}" is not JSON data`)
+            entries[name] = json
+          }
+          const bytes = Object.values(entries).reduce((n, json) => n + Buffer.byteLength(json), 0)
+          if (bytes > store.maxBytes) throw new RangeError(`keep: ${bytes} bytes is over the ${store.maxBytes}-byte cap`)
+          store.keep(session, entries)
+        },
+        forget: (name?: unknown) => store.forget(session, name === undefined ? undefined : String(name)),
+      },
+    })
     // A runtime per run, so concurrent runs keep separate call logs.
     const runtime = CodeMode.make({
       tools: tree,
+      extensions: [state],
       limits: { timeoutMs, maxToolCalls: o.maxToolCalls, maxOutputBytes: VALUE_CEILING },
       hooks: {
         "tool.before": (call) =>
@@ -224,10 +307,16 @@ export function createRunner(o: Options) {
     })
     let result: { ok: boolean; error?: { kind: string; message: string } }
     let reply: { text: string; isError: boolean; spilled: boolean }
+    const keptNow = () => {
+      const names = store.names(session)
+      return names.length ? { kept: names } : {}
+    }
     try {
-      const { toolCalls: _, ...done } = await Effect.runPromise(runtime.execute(code), { signal: options.signal })
+      const { toolCalls: _, ...done } = await Effect.runPromise(runtime.execute(code, store.values(session)), {
+        signal: options.signal,
+      })
       result = done
-      reply = fit({ ...done, calls }, o)
+      reply = fit({ ...done, ...keptNow(), calls }, o)
     } catch (e) {
       // A cancelled run, or a failure in this server (e.g. the spill file can't be written): still a tool result.
       const cancelled = options.signal?.aborted === true
@@ -235,7 +324,7 @@ export function createRunner(o: Options) {
         ? { kind: "Cancelled", message: "The run was cancelled." }
         : { kind: "InternalError", message: e instanceof Error ? e.message : String(e) }
       result = { ok: false, error }
-      const head = { ok: false, error: clipError(error, o.maxOutputBytes) }
+      const head = { ok: false, error: clipError(error, o.maxOutputBytes), ...keptNow() }
       const part = keepCalls(calls, o.maxOutputBytes, (p) => ({ ...head, ...p }))
       reply = { text: JSON.stringify({ ...head, ...part }), isError: true, spilled: false }
     }
@@ -265,7 +354,7 @@ export function createRunner(o: Options) {
   return { description, execute }
 }
 
-function fit(reply: { ok: boolean; error?: { kind: string; message: string }; calls: Row[] }, o: Options) {
+function fit(reply: { ok: boolean; error?: { kind: string; message: string }; kept?: string[]; calls: Row[] }, o: Options) {
   const cap = o.maxOutputBytes
   const { counts, rows } = logOf(reply.calls, reply.ok)
   const { calls: _, ...rest } = reply
@@ -280,7 +369,13 @@ function fit(reply: { ok: boolean; error?: { kind: string; message: string }; ca
   // ok, error and the path come first; then as many call rows as fit; the preview gets whatever room is left.
   // shortcut: a cap under ~1 KB, or an error message near the cap, can still go over it.
   const error = reply.error && clipError(reply.error, cap)
-  const head = { ok: reply.ok, ...(error ? { error } : {}), spilled: { path, bytes }, ...counts }
+  const head = {
+    ok: reply.ok,
+    ...(error ? { error } : {}),
+    ...(reply.kept ? { kept: reply.kept } : {}),
+    spilled: { path, bytes },
+    ...counts,
+  }
   const part = keepCalls(rows, cap, (p) => ({ ...head, ...p, preview: "" }))
   const envelope = (preview: string) => ({ ...head, ...part, preview })
   // The longest start of the full reply whose JSON-escaped UTF-8 still fits; never more characters than bytes left.
@@ -310,10 +405,10 @@ function prune(dir: string) {
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
     "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back: chain calls, shrink big results.",
-    "`code` is plain JS: no code fence, imports, require, fetch or timers. `return` only what you need. Await every call (pending ones are interrupted); run independent ones with Promise.allSettled.",
+    "`code` is plain JS: no code fence, imports, require, fetch or timers. Await every call (pending ones are interrupted); run independent ones with Promise.allSettled.",
     "Same JSON as direct LocalForge; a refused call rejects, a failed command resolves with success: false. Use absolute paths or an absolute cwd. Processes started here are only reachable here.",
-    ...(o.allowShell ? ["Shell commands: literal strings or argv arrays, never built from tool results."] : []),
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}), ${o.maxToolCalls} calls. Reply: ok, value or error, logs, warnings, calls [{tool, status, input}] (interrupted may still finish); if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes: spilled {path, bytes}, preview, the calls that fit; or return less.`,
+    "keep({name: value}): later programs in the session get it as variables; forget(name?) drops it. Background tasks: pass a unique session.",
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}), ${o.maxToolCalls} calls. Reply: ok, value|error, logs, warnings, kept, calls [{tool, status, input}]; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes: spilled {path, bytes}, preview, the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [

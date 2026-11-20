@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { connect, serve } from "./mcp"
-import { createRunner, type McpTool } from "./runner"
+import { createRunner, createStore, type McpTool } from "./runner"
 
 const VERSION = "0.2.0"
 // shortcut: 2025-03-26 allowed JSON-RPC batches, which serve() answers with one -32600; add batch support if a client sends them.
@@ -39,8 +39,11 @@ const localforge = connect(
   },
 )
 
-const timeoutMs = config.timeoutMs ?? 60_000
-const maxTimeoutMs = config.maxTimeoutMs ?? 300_000
+const timeoutMs = config.timeoutMs ?? 120_000
+// Quick ends a tool call at 300 s; the default leaves room for the reply to get back.
+const maxTimeoutMs = config.maxTimeoutMs ?? 280_000
+// Kept values outlive a LocalForge restart, which builds a new runner.
+const store = createStore()
 const build = (tools: McpTool[]) =>
   createRunner({
     tools,
@@ -48,7 +51,7 @@ const build = (tools: McpTool[]) =>
     allowShell: config.allowShell ?? true,
     timeoutMs,
     maxTimeoutMs,
-    maxToolCalls: config.maxToolCalls ?? 50,
+    maxToolCalls: config.maxToolCalls ?? 1000,
     maxOutputBytes: config.maxOutputBytes ?? 30_000,
     // Inside the repo by default, so LocalForge's read roots can reach spilled results.
     spillDir: config.spillDir ? fromConfig(config.spillDir) : join(root, ".spill"),
@@ -60,6 +63,7 @@ const build = (tools: McpTool[]) =>
         : config.historyFile
           ? fromConfig(config.historyFile)
           : join(root, ".history", "runs.jsonl"),
+    store,
   })
 runner = build((await localforge.request("tools/list")).tools)
 
@@ -74,6 +78,7 @@ const executeTool = () => ({
         type: "number",
         description: `Time limit for this program in seconds (default ${Math.min(timeoutMs, maxTimeoutMs) / 1000}, max ${maxTimeoutMs / 1000}).`,
       },
+      session: { type: "string", description: 'Whose kept values the program gets (default "default"); background tasks pass a unique one.' },
     },
     required: ["code"],
   },
@@ -101,7 +106,12 @@ await serve(async (method, params, signal) => {
         return { content: [{ type: "text", text }], isError: true }
       }
       const seconds = params.arguments?.timeout_seconds
-      const reply = await runner!.execute(code, { signal, ...(typeof seconds === "number" ? { timeoutMs: seconds * 1000 } : {}) })
+      const session = params.arguments?.session
+      const reply = await runner!.execute(code, {
+        signal,
+        ...(typeof seconds === "number" ? { timeoutMs: seconds * 1000 } : {}),
+        ...(typeof session === "string" ? { session } : {}),
+      })
       return { content: [{ type: "text", text: reply.text }], ...(reply.isError ? { isError: true } : {}) }
     }
     default:

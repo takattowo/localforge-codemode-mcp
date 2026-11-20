@@ -100,7 +100,8 @@ const startGrowing = async (mode = "") => {
     }
   }
   const growing = {
-    run: async (code: string) => JSON.parse((await ask("tools/call", { name: "execute", arguments: { code } })).content[0].text),
+    run: async (code: string, session?: string) =>
+      JSON.parse((await ask("tools/call", { name: "execute", arguments: { code, session } })).content[0].text),
     description: async () => (await ask("tools/list")).tools[0].description,
     // LocalForge exits on this call; the next call starts it again.
     die: () => growing.run(`try { await tools.localforge.filesystem({ action: "die" }) } catch (e) {} return 0`),
@@ -138,6 +139,20 @@ test("when the restarted LocalForge's tool list fails, the old tools stay and ca
     await g.die()
     expect((await g.run(`return await tools.localforge.filesystem({})`)).value).toEqual({ tool: "filesystem", start: 2 })
     expect(await g.description()).toBe(before)
+    expect(await g.end()).toBe(0)
+  } finally {
+    g.cleanup()
+  }
+}, 30_000)
+
+test("default limits are 120 s (up to 280 s) and 1000 calls; kept values follow the session and outlive a LocalForge restart", async () => {
+  const g = await startGrowing()
+  try {
+    expect(await g.description()).toContain("Limits: 120 s (timeout_seconds, up to 280), 1000 calls.")
+    await g.run(`keep({ x: 1 })`, "s1")
+    expect((await g.run(`return typeof x`)).value).toBe("undefined")
+    await g.die()
+    expect((await g.run(`return x`, "s1")).value).toBe(1)
     expect(await g.end()).toBe(0)
   } finally {
     g.cleanup()
@@ -213,7 +228,7 @@ describe.skipIf(denied === undefined)("server over stdio with the real LocalForg
         send({ jsonrpc: "2.0", method: "notifications/initialized" })
         send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
         send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "execute", arguments: { code } } })
-        // Without the cancel this would run for the default 60 s; a cancelled request gets no reply.
+        // Without the cancel this would run for the default 120 s; a cancelled request gets no reply.
         send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "execute", arguments: { code: "while (true) {}" } } })
         send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 4 } })
         server.stdin.end()
