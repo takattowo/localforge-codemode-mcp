@@ -553,6 +553,13 @@ describe("keep", () => {
     expect((await run(r, `const n = 5; return n`)).body.value).toBe(5)
   })
 
+  test("a kept Set comes back as an array and a Map as an object", async () => {
+    const r = runner(() => ok({}))
+    await run(r, `keep({ seen: new Set(["a", "b"]), byName: new Map([["a", 1]]), deep: { s: new Set([1]) } })`)
+    const { body } = await run(r, `return { seen, byName, deep, has: seen.includes("a") }`)
+    expect(body.value).toEqual({ seen: ["a", "b"], byName: { a: 1 }, deep: { s: [1] }, has: true })
+  })
+
   test("each session has its own values; no session is the default one", async () => {
     const r = runner(() => ok({}))
     await run(r, `keep({ x: "a" })`, "task-a")
@@ -580,12 +587,21 @@ describe("keep", () => {
 
   test("a name that can't be a variable is refused, and nothing in that call is kept", async () => {
     const r = runner(() => ok({}))
-    for (const name of ["1x", "a-b", "if", "tools", "search", "keep", "forget", "JSON", "undefined"]) {
+    for (const name of ["1x", "a-b", "if", "await", "require", "tools", "search", "keep", "forget", "JSON", "undefined"]) {
       const { body } = await run(r, `try { keep({ fine: 1, ${JSON.stringify(name)}: 2 }) } catch (e) { return e.message }`)
       expect(body.value).toContain(`"${name}"`)
       expect(body).not.toHaveProperty("kept")
     }
     expect((await run(r, `try { keep([1]) } catch (e) { return e.message }`)).body.value).toContain("keep({ name: value })")
+    const taken = await run(r, `try { keep({ Map: 1 }) } catch (e) { return e.message }`)
+    expect(taken.body.value).toContain("taken by a global in the program")
+    expect(taken.body.value).toContain("pick another name")
+  })
+
+  test("a name only the server has as a global (self, process, fetch, setTimeout) can be kept", async () => {
+    const r = runner(() => ok({}))
+    await run(r, `keep({ self: 1, process: 2, fetch: 3, setTimeout: 4 })`)
+    expect((await run(r, `return [self, process, fetch, setTimeout]`)).body.value).toEqual([1, 2, 3, 4])
   })
 
   test("over the cap the oldest values go first, across sessions; one call over the cap is refused", async () => {
@@ -604,11 +620,27 @@ describe("keep", () => {
     expect(big.body.kept).toEqual(["a", "c"])
   })
 
+  test("a spilled reply and a cancelled one still list kept names", async () => {
+    const r = runner(() => ok({}), { maxOutputBytes: 1_000 })
+    await run(r, `keep({ x: 1 })`, "spill")
+    const spilled = await run(r, `return "x".repeat(5000)`, "spill")
+    expect(spilled.body.spilled).toBeDefined()
+    expect(spilled.body.kept).toEqual(["x"])
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+    const reply = await r.execute(`keep({ y: 2 }); while (true) {}`, { signal: controller.signal, session: "spill" })
+    const body = JSON.parse(reply.text)
+    expect(body.error.kind).toBe("Cancelled")
+    expect(body.kept).toEqual(["x", "y"])
+  })
+
   test("the description names keep, forget and session", () => {
     const d = runner(() => ok({})).description
     expect(d).toContain("keep({name: value})")
     expect(d).toContain("forget(name?)")
     expect(d).toContain("unique session")
+    expect(d).toContain("JSON copies, consts in the session's later programs")
+    expect(d).toContain("(interrupted may still finish)")
     expect(d).not.toContain("never built from tool results")
   })
 })

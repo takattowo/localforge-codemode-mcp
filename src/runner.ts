@@ -42,8 +42,16 @@ const SPILL_KEEP = 100
 const SPILLED = /^result-\d+-[0-9a-f]{8}\.json$/
 // What keep() may hold, as JSON bytes, across every session.
 const KEEP_BYTES = 50_000_000
-// Names a kept value can't take: the program's own globals.
-const TAKEN = new Set(["tools", "search", "keep", "forget"])
+// Names a kept value can't take: the program's own globals, require (a program built-in not on Bun's globalThis),
+// await (strict mode allows `let await`, but a program can never read it) and undefined.
+const TAKEN = new Set(["tools", "search", "keep", "forget", "require", "await", "undefined"])
+// The server's globals a program also has (JSON, Map, ...), probed once in a bare runtime; self, process, fetch and
+// the like stay free. If the probe fails, every server global counts as taken.
+const PROGRAM_GLOBALS = (() => {
+  const names = Object.getOwnPropertyNames(globalThis).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n))
+  const r = Effect.runSync(CodeMode.make({ tools: {} }).execute(`return [${names.map((n) => `typeof ${n}`).join(",")}]`, {}))
+  return new Set(r.ok ? names.filter((_, i) => (r.value as string[])[i] !== "undefined") : names)
+})()
 
 const textOf = (r: CallResult) => (r.content ?? []).map((c) => c.text ?? "").join("")
 const parse = (text: string): any => {
@@ -63,6 +71,8 @@ const safeJson = (v: unknown) => {
   }
 }
 const bytesOf = (v: unknown) => Buffer.byteLength(JSON.stringify(v))
+// keep() replacer: JSON.stringify writes a Set or Map as {}; keep their contents as an array and an object.
+const asJson = (_: string, v: unknown) => (v instanceof Set ? [...v] : v instanceof Map ? Object.fromEntries(v) : v)
 // Error messages in a capped reply get at most an eighth of the cap.
 const clipError = (e: { kind: string; message: string }, cap: number) => ({
   kind: e.kind,
@@ -180,6 +190,7 @@ export function createStore(maxBytes = KEEP_BYTES) {
   return {
     maxBytes,
     names: (session: string) => [...(sessions.get(session)?.keys() ?? [])],
+    // shortcut: parses the whole session's JSON on every run start; parse per name on first read if big sessions get slow.
     values: (session: string) =>
       Object.fromEntries([...(sessions.get(session) ?? [])].map(([name, v]) => [name, JSON.parse(v.json)])),
     keep(session: string, entries: Record<string, string>) {
@@ -204,7 +215,7 @@ export function createStore(maxBytes = KEEP_BYTES) {
 
 // A kept value becomes a variable, so its name must be one that isn't already taken.
 const keepable = (name: string) => {
-  if (!/^[A-Za-z_$][\w$]*$/.test(name) || TAKEN.has(name) || name in globalThis) return false
+  if (!/^[A-Za-z_$][\w$]*$/.test(name) || TAKEN.has(name) || PROGRAM_GLOBALS.has(name)) return false
   try {
     // Reserved words (if, let, yield, ...) pass the pattern; strict-mode parsing refuses them.
     new Function(`"use strict"; let ${name}`)
@@ -266,8 +277,10 @@ export function createRunner(o: Options) {
           const entries: Record<string, string> = {}
           for (const [name, value] of Object.entries(values)) {
             if (!keepable(name))
-              throw new TypeError(`keep: "${name}" can't be a variable (not an identifier, or taken by a global)`)
-            const json = JSON.stringify(value)
+              throw new TypeError(
+                `keep: "${name}" can't be a variable: not an identifier, or taken by a global in the program; pick another name`,
+              )
+            const json = JSON.stringify(value, asJson)
             if (json === undefined) throw new TypeError(`keep: "${name}" is not JSON data`)
             entries[name] = json
           }
@@ -405,10 +418,10 @@ function prune(dir: string) {
 function describe(catalog: ReadonlyArray<{ signature: string; description: string }>, exposed: McpTool[], o: Options) {
   const rules = [
     "Run JavaScript on the user's PC that calls LocalForge tools; only its return value comes back: chain calls, shrink big results.",
-    "`code` is plain JS: no code fence, imports, require, fetch or timers. Await every call (pending ones are interrupted); run independent ones with Promise.allSettled.",
+    "`code` is plain JS: no code fence, imports, require, fetch or timers. Await every call (else interrupted); run independent ones with Promise.allSettled.",
     "Same JSON as direct LocalForge; a refused call rejects, a failed command resolves with success: false. Use absolute paths or an absolute cwd. Processes started here are only reachable here.",
-    "keep({name: value}): later programs in the session get it as variables; forget(name?) drops it. Background tasks: pass a unique session.",
-    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}), ${o.maxToolCalls} calls. Reply: ok, value|error, logs, warnings, kept, calls [{tool, status, input}]; if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes: spilled {path, bytes}, preview, the calls that fit; or return less.`,
+    "keep({name: value}): JSON copies, consts in the session's later programs; forget(name?) drops. Background tasks: pass a unique session.",
+    `Limits: ${Math.min(o.timeoutMs, o.maxTimeoutMs) / 1000} s (timeout_seconds, up to ${o.maxTimeoutMs / 1000}), ${o.maxToolCalls} calls. Reply: ok, value|error, logs, warnings, kept, calls [{tool, status, input}] (interrupted may still finish); if ok, completed calls only as completed {tool: n}. Over ${o.maxOutputBytes} bytes: spilled {path, bytes}, preview, the calls that fit; or return less.`,
   ]
   if (o.fullCatalog)
     return [
