@@ -276,7 +276,7 @@ export function createRunner(o: Options) {
           // Only a plain object: a Map, Set or array would pass typeof and keep nothing.
           const proto = typeof values === "object" && values !== null ? Object.getPrototypeOf(values) : undefined
           if (proto !== Object.prototype && proto !== null)
-            throw new TypeError("keep takes an object: keep({ name: value })")
+            throw new TypeError("keep takes a plain object: keep({ name: value })")
           const entries: Record<string, string> = {}
           for (const [name, value] of Object.entries(values as object)) {
             if (!keepable(name))

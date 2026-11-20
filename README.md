@@ -52,8 +52,9 @@ would count as one call against `maxToolCalls` and the call log.
 `keep({ files, hits })` saves plain JSON data; every later program in the same session gets each name as a constant
 (a program can still declare its own variable with that name). `keep` takes a plain object, not a `Map`, `Set` or
 array. A kept `Set` comes back as an array and a `Map` as a plain object; a function is left out without an error;
-other non-JSON values (`Date`, `undefined`) follow `JSON.stringify`. `forget("files")` drops one, `forget()` all of
-the session. While a session has values, the reply lists their names under `kept`. `execute` takes
+a `Date` is kept as its ISO string; an `undefined` value is refused, and then nothing in that call is kept.
+`forget("files")` drops one, `forget()` all of the session. While a session has values, the reply lists their names
+under `kept`. `execute` takes
 an optional `session` string (default `default`): one server serves every chat and task, so background tasks should
 pass a unique one. Two runs at the same time in one session each see the values from their own start, and the last
 `keep()` of a name wins.

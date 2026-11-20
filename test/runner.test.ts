@@ -602,7 +602,7 @@ describe("keep", () => {
     const r = runner(() => ok({}))
     for (const arg of [`new Map([["a", 1]])`, `new Set(["a"])`, `[1]`]) {
       const { body } = await run(r, `try { keep(${arg}); return "kept" } catch (e) { return e.message }`)
-      expect(body.value).toBe("keep takes an object: keep({ name: value })")
+      expect(body.value).toBe("keep takes a plain object: keep({ name: value })")
       expect(body).not.toHaveProperty("kept")
     }
   })
@@ -611,6 +611,13 @@ describe("keep", () => {
     const r = runner(() => ok({}))
     expect((await run(r, `keep({ parse: (x) => x, n: 1 }); return 0`)).body.kept).toEqual(["n"])
     expect((await run(r, `return [typeof parse, n]`)).body.value).toEqual(["undefined", 1])
+  })
+
+  test("an undefined value is refused, and nothing in that call is kept", async () => {
+    const r = runner(() => ok({}))
+    const { body } = await run(r, `try { keep({ u: undefined, n: 1 }) } catch (e) { return e.message }`)
+    expect(body.value).toContain(`"u" is not JSON data`)
+    expect(body).not.toHaveProperty("kept")
   })
 
   test("a name only the server has as a global (self, process, fetch, setTimeout) can be kept", async () => {
