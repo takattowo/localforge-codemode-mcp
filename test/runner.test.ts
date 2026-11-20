@@ -598,6 +598,21 @@ describe("keep", () => {
     expect(taken.body.value).toContain("pick another name")
   })
 
+  test("keep refuses a Map, a Set or an array instead of keeping nothing", async () => {
+    const r = runner(() => ok({}))
+    for (const arg of [`new Map([["a", 1]])`, `new Set(["a"])`, `[1]`]) {
+      const { body } = await run(r, `try { keep(${arg}); return "kept" } catch (e) { return e.message }`)
+      expect(body.value).toBe("keep takes an object: keep({ name: value })")
+      expect(body).not.toHaveProperty("kept")
+    }
+  })
+
+  test("a function value is left out without an error", async () => {
+    const r = runner(() => ok({}))
+    expect((await run(r, `keep({ parse: (x) => x, n: 1 }); return 0`)).body.kept).toEqual(["n"])
+    expect((await run(r, `return [typeof parse, n]`)).body.value).toEqual(["undefined", 1])
+  })
+
   test("a name only the server has as a global (self, process, fetch, setTimeout) can be kept", async () => {
     const r = runner(() => ok({}))
     await run(r, `keep({ self: 1, process: 2, fetch: 3, setTimeout: 4 })`)
@@ -621,14 +636,25 @@ describe("keep", () => {
   })
 
   test("a spilled reply and a cancelled one still list kept names", async () => {
-    const r = runner(() => ok({}), { maxOutputBytes: 1_000 })
+    const store = createStore()
+    const r = runner(() => ok({}), { maxOutputBytes: 1_000, store })
     await run(r, `keep({ x: 1 })`, "spill")
     const spilled = await run(r, `return "x".repeat(5000)`, "spill")
     expect(spilled.body.spilled).toBeDefined()
     expect(spilled.body.kept).toEqual(["x"])
+    // Abort from inside a call, after keep() has run, so a slow machine can't cancel too early.
     const controller = new AbortController()
-    setTimeout(() => controller.abort(), 100)
-    const reply = await r.execute(`keep({ y: 2 }); while (true) {}`, { signal: controller.signal, session: "spill" })
+    const hang = runner(
+      () => {
+        controller.abort()
+        return new Promise(() => {})
+      },
+      { maxOutputBytes: 1_000, store },
+    )
+    const reply = await hang.execute(`keep({ y: 2 }); await tools.localforge.git({ action: "status" })`, {
+      signal: controller.signal,
+      session: "spill",
+    })
     const body = JSON.parse(reply.text)
     expect(body.error.kind).toBe("Cancelled")
     expect(body.kept).toEqual(["x", "y"])

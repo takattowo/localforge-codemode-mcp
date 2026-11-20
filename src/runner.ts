@@ -42,13 +42,14 @@ const SPILL_KEEP = 100
 const SPILLED = /^result-\d+-[0-9a-f]{8}\.json$/
 // What keep() may hold, as JSON bytes, across every session.
 const KEEP_BYTES = 50_000_000
+const IDENT = /^[A-Za-z_$][\w$]*$/
 // Names a kept value can't take: the program's own globals, require (a program built-in not on Bun's globalThis),
 // await (strict mode allows `let await`, but a program can never read it) and undefined.
 const TAKEN = new Set(["tools", "search", "keep", "forget", "require", "await", "undefined"])
 // The server's globals a program also has (JSON, Map, ...), probed once in a bare runtime; self, process, fetch and
 // the like stay free. If the probe fails, every server global counts as taken.
 const PROGRAM_GLOBALS = (() => {
-  const names = Object.getOwnPropertyNames(globalThis).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n))
+  const names = Object.getOwnPropertyNames(globalThis).filter((n) => IDENT.test(n))
   const r = Effect.runSync(CodeMode.make({ tools: {} }).execute(`return [${names.map((n) => `typeof ${n}`).join(",")}]`, {}))
   return new Set(r.ok ? names.filter((_, i) => (r.value as string[])[i] !== "undefined") : names)
 })()
@@ -215,7 +216,7 @@ export function createStore(maxBytes = KEEP_BYTES) {
 
 // A kept value becomes a variable, so its name must be one that isn't already taken.
 const keepable = (name: string) => {
-  if (!/^[A-Za-z_$][\w$]*$/.test(name) || TAKEN.has(name) || PROGRAM_GLOBALS.has(name)) return false
+  if (!IDENT.test(name) || TAKEN.has(name) || PROGRAM_GLOBALS.has(name)) return false
   try {
     // Reserved words (if, let, yield, ...) pass the pattern; strict-mode parsing refuses them.
     new Function(`"use strict"; let ${name}`)
@@ -272,10 +273,12 @@ export function createRunner(o: Options) {
       name: "state",
       globals: {
         keep: (values: unknown) => {
-          if (typeof values !== "object" || values === null || Array.isArray(values))
+          // Only a plain object: a Map, Set or array would pass typeof and keep nothing.
+          const proto = typeof values === "object" && values !== null ? Object.getPrototypeOf(values) : undefined
+          if (proto !== Object.prototype && proto !== null)
             throw new TypeError("keep takes an object: keep({ name: value })")
           const entries: Record<string, string> = {}
-          for (const [name, value] of Object.entries(values)) {
+          for (const [name, value] of Object.entries(values as object)) {
             if (!keepable(name))
               throw new TypeError(
                 `keep: "${name}" can't be a variable: not an identifier, or taken by a global in the program; pick another name`,
