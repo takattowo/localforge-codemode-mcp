@@ -36,9 +36,9 @@ Use the full `bun.exe` path: Quick's PATH may not include `.bun\bin`. Restart Qu
 | `mcpConfig` | required | Quick's `mcp_config.json`; the LocalForge entry is read from it |
 | `server` | `localforge-mcp` | Entry name in `mcpServers` |
 | `allowShell` | `true` | Expose `execute` and `process` to programs |
-| `timeoutMs` | `60000` | Per program |
-| `maxTimeoutMs` | `300000` | Most a program may ask for with `timeout_seconds` |
-| `maxToolCalls` | `50` | Per program |
+| `timeoutMs` | `120000` | Per program |
+| `maxTimeoutMs` | `280000` | Most a program may ask for with `timeout_seconds`. Quick ends a tool call at 300 s, so keep it under that |
+| `maxToolCalls` | `1000` | Per program |
 | `maxOutputBytes` | `30000` | Bigger replies are saved to `spillDir` and returned as a path and preview |
 | `spillDir` | `<repo>/.spill` | Keep it inside LocalForge's read roots so the model can read spilled files |
 | `fullCatalog` | `false` | List full signatures with every argument's notes (~15.7k characters for LocalForge). Quick cuts tool descriptions at about 2,048 characters, so keep it off there; the default is one short line per tool, under 2,000 characters, and `search()` in a program returns the notes either way |
@@ -46,6 +46,13 @@ Use the full `bun.exe` path: Quick's PATH may not include `.bun\bin`. Restart Qu
 
 `batch`, `todo` and `workspace` are never exposed: a program already runs calls in parallel or in order, and `batch`
 would count as one call against `maxToolCalls` and the call log.
+
+## Kept values
+
+`keep({ files, hits })` saves plain JSON data; every later program in the same session gets each name as a variable
+(a program can still declare its own variable with that name). `forget("files")` drops one, `forget()` all of the
+session. While a session has values, the reply lists their names under `kept`. `execute` takes an optional `session`
+string (default `default`): one server serves every chat and task, so background tasks should pass a unique one.
 
 ## Safety
 
@@ -66,5 +73,6 @@ shell commands, with or without this server.
 - When a program succeeds, the reply lists only the calls that failed (including commands with `success: false`) or were interrupted (`tool`, `status`, `input`); completed calls are only counted per tool, under `completed`, keyed like `tool` (`localforge.git`). A failed, timed-out or cancelled run keeps every call's row, since it has no value to show what already happened. The history file keeps the program's code.
 - Cancelling a call in Quick stops the program and sends no reply, but a LocalForge command already running keeps going.
 - With `maxOutputBytes` under about 1 KB, a reply can still go over the cap.
+- Kept values live in memory only: a restart of this server (or of Quick) loses them; a LocalForge restart does not. They are copies: changing the original later does not change what was kept. `keep()` saves at once, so a value outlives a program that fails afterwards, and values are bound when a program starts, so `keep()` and `forget()` show from the next program on. All sessions together hold at most 50 MB of JSON; past that, the least recently kept values go first, from any session, and a single `keep()` over 50 MB is refused. Names must be identifiers not taken by a global (`tools`, `search`, `keep`, `forget`, `JSON`, ...).
 - Relative paths in `codemode.json` are resolved from the folder that holds it.
-- The default description has about 125 characters left under 2,000. The end-to-end test fails once fewer than 100 are left; past 2,000 the last tool lines are cut and a warning goes to stderr.
+- The default description has about 120 characters left under 2,000. The end-to-end test fails once fewer than 100 are left; past 2,000 the last tool lines are cut and a warning goes to stderr.

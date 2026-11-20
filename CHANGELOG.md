@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `keep({ name: value })` saves plain JSON data that later programs in the same session get as variables; `forget(name)` drops one, `forget()` all. `execute` takes an optional `session` (default `default`) so parallel tasks don't share values. Memory only, at most 50 MB across sessions, least recently kept first out. The reply lists the session's names under `kept`.
+- New defaults: 1000 tool calls (was 50) and 120 s (was 60) per program; `timeout_seconds` goes up to 280 s (was 300), since Quick ends a tool call at 300 s.
+- The description no longer says shell commands must be literal strings (that rule blocked commands built from search results); its rules are shorter to make room for `keep`.
 - A LocalForge restart before the first tool list no longer logs a misleading `ReferenceError`; the startup read gets the new LocalForge's tools.
 
 ## 0.2.0
